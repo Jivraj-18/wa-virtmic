@@ -1,0 +1,57 @@
+# E4 simulated meeting: 4 voices, most lines NOT addressed to Maya (she must stay silent),
+# a few "Maya, ..." lines (she must answer), hard negatives that mention her in the 3rd person,
+# and one barge-in while she is talking. `addressed` is only read by scripts/meet/score_sim.py.
+name: meeting
+voice: en-US-GuyNeural
+transcribe_language: en
+lines:
+  - text: "Okay, let's start. Today we need to decide whether the new checkout page launches next week or in two weeks."
+    voice: en-US-GuyNeural
+    reply_timeout: 4
+  - text: "From the design side, the mobile layout is done, but the payment error screens still look rough."
+    voice: en-GB-SoniaNeural
+    reply_timeout: 4
+  - text: "Engineering can ship next week, but only if we skip the load test on the new payment provider."
+    voice: en-IN-PrabhatNeural
+    reply_timeout: 4
+  - text: "I'm not comfortable skipping the load test. Last time we had an outage on launch day."
+    voice: en-US-JennyNeural
+    reply_timeout: 4
+  - text: "Maya, what do you think, should we launch next week without the load test?"
+    voice: en-GB-SoniaNeural
+    addressed: true
+    reply_timeout: 15
+  - text: "Fair point. I did send the error screen mock-ups to Maya yesterday, by the way."
+    voice: en-US-GuyNeural
+    reply_timeout: 4
+  - text: "The load test itself only takes two days if the provider gives us a sandbox."
+    voice: en-IN-PrabhatNeural
+    reply_timeout: 4
+  - text: "But we still don't know if they will give us a sandbox. We keep going around in circles on this."
+    voice: en-US-JennyNeural
+    reply_timeout: 4
+  - text: "Hey Maya, can you explain in detail all the risks of launching a payment page without a load test, and how each one could hurt us?"
+    voice: en-US-GuyNeural
+    addressed: true
+    reply_timeout: 15
+  - text: "Sorry, hold on, let me jump in here. We are running out of time."
+    voice: en-US-JennyNeural
+    interrupt: true
+    after: 2.5
+    reply_timeout: 4
+  - text: "Let's ask Maya to write up the notes later."
+    voice: en-IN-PrabhatNeural
+    reply_timeout: 4
+  - text: "So the plan is: request the sandbox today, run the load test, and launch in two weeks."
+    voice: en-US-GuyNeural
+    reply_timeout: 4
+  - text: "Sounds good to me. I'll polish the error screens in the meantime."
+    voice: en-GB-SoniaNeural
+    reply_timeout: 4
+  - text: "Anything we are forgetting, Maya?"
+    voice: en-US-JennyNeural
+    addressed: true
+    reply_timeout: 15
+  - text: "Great, thanks everyone. Talk next week."
+    voice: en-US-GuyNeural
+    reply_timeout: 4

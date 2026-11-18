@@ -53,6 +53,9 @@ class Maya:
         self.triggered = set()     # item_ids we answered
         self.cancelled = set()     # response ids we stopped (drop their late audio)
         self.response_id = None
+        self.audio_item = None     # (item_id, wall time of its first audio delta) of Maya's current spoken answer
+        self.stats_written = False
+        self.response_active = False
         self.play_until = 0.0      # wall time when queued Maya audio ends (pacat plays in real time)
         self.stats = {"utterances": 0, "triggers": 0, "early_triggers": 0, "barge_ins": 0, "suggestions": 0}
         self.suggester = Suggester(chat_post or self._log_suggestion, min_interval=suggest_interval,
@@ -80,6 +83,11 @@ class Maya:
     def _log_suggestion(self, text):
         self.stats["suggestions"] += 1
         self.event("chat_suggestion", text=text)
+
+    def write_stats(self):
+        if not self.stats_written:
+            self.stats_written = True
+            self.event("stats", **self.stats)
 
     def speaking(self) -> bool:
         return time.time() < self.play_until
@@ -110,10 +118,15 @@ class Maya:
                 await self.trigger(iid, text, early=False)
         elif ty == "response.created":
             self.response_id = m.get("response", {}).get("id")
+            self.response_active = True
+        elif ty == "response.done":
+            self.response_active = False
         elif ty in ("response.output_audio.delta", "response.audio.delta"):
             if m.get("response_id") in self.cancelled:
                 m["delta"] = ""          # late audio of a response we stopped: Agent writes 0 bytes
                 return
+            if not self.audio_item or self.audio_item[0] != m.get("item_id"):
+                self.audio_item = (m.get("item_id"), time.time())
             n = len(m.get("delta", "")) * 3 // 4
             self.play_until = max(time.time(), self.play_until) + n / (2 * RATE)
         elif ty in ("response.output_audio_transcript.done", "response.audio_transcript.done"):
@@ -131,7 +144,12 @@ class Maya:
         self.event("barge_in", source=source)
         await self.agent.flush_player()
         try:
-            await self.agent.send({"type": "response.cancel"})
+            if self.response_active:  # generation usually finished long before playback did
+                await self.agent.send({"type": "response.cancel"})
+            if self.audio_item:  # tell the model how much of its answer was actually heard
+                iid, t_first = self.audio_item
+                await self.agent.send({"type": "conversation.item.truncate", "item_id": iid, "content_index": 0,
+                                       "audio_end_ms": max(0, int((time.time() - t_first) * 1000) - 100)})
         except Exception:
             pass
 
@@ -168,7 +186,7 @@ class Maya:
             self.suggester.stop.set()
             for t in tasks:
                 t.cancel()
-            self.event("stats", **self.stats)
+            self.write_stats()
 
 
 # ==================================================================== CLI
@@ -180,7 +198,7 @@ def cmd_agent(a):
     try:
         asyncio.run(maya.run(a.seconds))
     except KeyboardInterrupt:
-        maya.event("stats", **maya.stats)
+        maya.write_stats()
 
 
 def main():
