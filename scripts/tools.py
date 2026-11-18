@@ -40,6 +40,7 @@ READ_CAP = 12000            # chars returned by read_file
 SNIPPET_LINES = 3           # context lines around a hit
 ASK_TIMEOUT = float(os.environ.get("E2_ASK_TIMEOUT", 90))
 ASK_MODEL = os.environ.get("E2_ASK_MODEL", "sonnet")
+LLM_FALLBACK_MODEL = os.environ.get("E2_LLM_FALLBACK_MODEL", "gpt-4.1-mini")  # "" disables the gateway tier
 CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or str(Path.home() / ".local/bin/claude")
 SLOW_TOOLS = {"ask_agent"}
 FILLER_AFTER = float(os.environ.get("E2_FILLER_AFTER", 1.5))  # seconds before a fast tool counts as slow
@@ -213,9 +214,45 @@ class ContextTools:
             return await self._ask_fallback(question, f"failed (exit {proc.returncode}): {why}", t)
         return {"answer": ans, "seconds": round(time.time() - t, 1)}
 
+    def _all_text(self, cap=120000) -> str:
+        parts, n = [], 0
+        for p, rel in self._files():
+            ext = p.suffix.lower()
+            if ext not in TEXT_EXT and ext != ".pdf":
+                continue
+            txt = (self._pdf_text(p) if ext == ".pdf" else p).read_text(errors="replace")
+            parts.append(f"===== {rel} =====\n{txt}")
+            n += len(parts[-1])
+            if n > cap:
+                break
+        return "\n\n".join(parts)[:cap]
+
+    def _llm_answer(self, question: str) -> str:
+        """Tier 2: one chat completion over all context text via the OpenAI-compatible LLM gateway."""
+        import urllib.request, uuid
+        import gateway
+        body = {"model": LLM_FALLBACK_MODEL, "temperature": 0, "messages": [
+            {"role": "system", "content": "You answer questions for a voice agent on a live phone call, using ONLY the "
+             "documents below. Later meeting notes override earlier ones. Reply in 1-3 short plain sentences that can "
+             "be read aloud, with exact numbers, dates and any calculation result. If the documents don't contain "
+             f"the answer, say so. (request {uuid.uuid4().hex[:8]})\n\n" + self._all_text()},
+            {"role": "user", "content": question}]}
+        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={**gateway.auth_header(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=45) as r:
+            return json.load(r)["choices"][0]["message"]["content"].strip()
+
     async def _ask_fallback(self, question, why, t):
-        """The research assistant is down (timeout, usage limit, ...): hand back the best keyword-search snippets so
-        the voice model can still try to combine them itself."""
+        """The research assistant is down (timeout, usage limit, ...). Tier 2: an LLM over all documents via the
+        gateway. Tier 3: hand back the best keyword-search snippets so the voice model can try to combine them."""
+        if LLM_FALLBACK_MODEL:
+            try:
+                ans = await asyncio.to_thread(self._llm_answer, question)
+                if ans:
+                    return {"answer": ans, "seconds": round(time.time() - t, 1),
+                            "note": f"research assistant {why}; answered by {LLM_FALLBACK_MODEL} over all documents"}
+            except Exception as e:
+                why += f"; gateway fallback failed: {type(e).__name__}: {e}"
         r = await asyncio.to_thread(self.search_knowledge, question, 6)
         return {"error": f"research assistant {why}", "seconds": round(time.time() - t, 1),
                 "fallback": "Here are the most relevant document snippets instead. Combine them carefully; later "
