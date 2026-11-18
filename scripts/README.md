@@ -27,6 +27,9 @@ caller ──▶ Chrome speaker ──▶ callout_sink (DEFAULT SINK) ──moni
 | `transcribe.py` | Speech-to-text via the LLM gateway `/openai/v1/audio/transcriptions` (gpt-4o-transcribe). `segments()` splits a track into utterances by energy and transcribes each one with real timestamps |
 | `.env` (gitignored, see `.env.example`) | `LLM_GATEWAY_BASE`, `LLM_GATEWAY_TOKEN` for an OpenAI-compatible LLM gateway (TTS `/openai/v1/audio/speech` gpt-4o-mini-tts, STT, Realtime client secrets). `speak.py` uses it by default, `--engine edge` uses edge-tts |
 | `gateway.py` | Reads the gateway settings and builds the auth header |
+| `callcenter.py` | **E1 call-center mode**: `start --context DIR` (runs `auto_answer.py --context DIR` in the background), `stop`, `status`, `start --check/--dry-run` (no Chrome), `agent` (context-built agent for `sim_call.py`), `summarize`. See `experiments/E1/RESULTS.md` |
+| `context.py` | E1: loads a context folder (`instructions.md`, `config.yaml`, `knowledge/*.md/.txt/.pdf`) and builds the agent's instructions/kwargs. Re-read on every call |
+| `call_summary.py` | E1: writes `summary.md` (caller, request, promises, follow-ups) for a call or sim-run folder via a chat completion on the LLM gateway |
 | `call_check.sh` | During a call: checks/fixes Chrome's stream routing, speaks the test line, records the caller |
 
 ## Run order
