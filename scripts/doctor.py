@@ -219,17 +219,21 @@ def check_gateway(offline: bool):
     if offline:
         return
     # 1) reachability: any HTTP answer from the base URL counts (no auth, no POST)
+    # (TCP + TLS handshake only: the gateway's own pages can be slow, and every HTTP request counts against its rate limit)
+    import ssl
+    from urllib.parse import urlsplit
+    u = urlsplit(gateway.base())
+    port = u.port or (443 if u.scheme == "https" else 80)
     t = time.time()
     try:
-        urllib.request.urlopen(urllib.request.Request(gateway.base() + "/", method="GET"), timeout=10).close()
-        code = 200
-    except urllib.error.HTTPError as e:
-        code = e.code
+        with socket.create_connection((u.hostname, port), timeout=10) as s:
+            if u.scheme == "https":
+                ssl.create_default_context().wrap_socket(s, server_hostname=u.hostname).close()
     except Exception as e:
         report("FAIL", "gateway reachable", f"{type(e).__name__}: {str(e)[:80]}",
                "check LLM_GATEWAY_BASE in scripts/.env and your network/VPN")
         return
-    report("PASS", "gateway reachable", f"HTTP {code} in {time.time() - t:.1f}s")
+    report("PASS", "gateway reachable", f"{u.scheme} connect in {time.time() - t:.2f}s")
     # 2) one realtime client-secret request (unique nonce inside, so the gateway cache can't answer it)
     from realtime_agent import client_secret
     t = time.time()
