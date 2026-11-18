@@ -1,0 +1,20 @@
+name: media_controls
+voice: en-IN-PrabhatNeural
+# Mode A. Lines marked interrupt: true are spoken WHILE audio is playing (the harness counts media as "agent talking"):
+# they start `after` seconds after the agent's reply to the previous line began (ack + media).
+lines:
+  - text: "Hi! Can you play the latest team update?"
+  - text: "Sorry, one quick question. What time is demo day on Friday?"
+    interrupt: true
+    after: 9.0
+  - text: "Okay, thanks. Continue please."
+  - text: "Can you skip to the next one?"
+    interrupt: true
+    after: 7.0
+  - text: "A bit louder please."
+    interrupt: true
+    after: 6.0
+  - text: "Okay, you can stop the music now."
+    interrupt: true
+    after: 6.0
+  - text: "Thanks, that's all. Bye!"
