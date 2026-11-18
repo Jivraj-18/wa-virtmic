@@ -6,4 +6,3 @@ greeting: "Hi, this is Pocket Radio. I can play the latest team update or some f
 media:
   podcast_voices: [coral, ash]      # gateway gpt-4o-mini-tts voices for host A / host B (edge-tts fallback)
   podcast_max_minutes: 3
-  resume_on_question: false         # after answering a mid-playback question, wait for "continue"
