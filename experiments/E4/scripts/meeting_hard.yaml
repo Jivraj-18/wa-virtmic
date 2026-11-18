@@ -1,0 +1,53 @@
+# E4 simulated meeting, harder: other people addressed by name, 3rd-person "Maya" mentions,
+# questions without a name, and a barge-in that addresses someone else. `addressed` is read by score_sim.py.
+name: meeting_hard
+voice: en-US-GuyNeural
+transcribe_language: en
+lines:
+  - text: "Morning all. Agenda today is the database migration and the rollout plan for Friday."
+    voice: en-US-GuyNeural
+    reply_timeout: 4
+  - text: "Maria, can you share your screen with the migration checklist?"
+    voice: en-IN-PrabhatNeural
+    reply_timeout: 4
+  - text: "Sure, sharing now. Steps one to four are done, step five is the data backfill."
+    voice: en-US-JennyNeural
+    reply_timeout: 4
+  - text: "What do you all think, is the backfill safe to run during business hours?"
+    voice: en-US-GuyNeural
+    reply_timeout: 4
+  - text: "Maya's summary from last week said the backfill locks the orders table for a few minutes."
+    voice: en-GB-SoniaNeural
+    reply_timeout: 4
+  - text: "Okay, Maya, quick one: how long would a rollback take if the backfill fails?"
+    voice: en-IN-PrabhatNeural
+    addressed: true
+    reply_timeout: 15
+  - text: "Right. Ravi, what do you think, can we run it at night instead?"
+    voice: en-US-GuyNeural
+    reply_timeout: 4
+  - text: "Night is fine. I think Maya and the on-call team should get the runbook before Friday."
+    voice: en-IN-PrabhatNeural
+    reply_timeout: 4
+  - text: "Maya, can you walk us through a step by step rollout plan for Friday, with all the checkpoints?"
+    voice: en-US-JennyNeural
+    addressed: true
+    reply_timeout: 15
+  - text: "Wait, wait. Ravi, sorry, quick question for you: is the staging copy of the database ready?"
+    voice: en-GB-SoniaNeural
+    interrupt: true
+    after: 3.0
+    reply_timeout: 4
+  - text: "Yes, staging was refreshed this morning."
+    voice: en-IN-PrabhatNeural
+    reply_timeout: 4
+  - text: "Can you ask Maya to send the checklist to everyone after the call?"
+    voice: en-US-GuyNeural
+    reply_timeout: 4
+  - text: "What would you recommend as the go or no-go signal, Maya?"
+    voice: en-US-JennyNeural
+    addressed: true
+    reply_timeout: 15
+  - text: "Good. Let's wrap up there. Thanks everyone."
+    voice: en-US-GuyNeural
+    reply_timeout: 4
