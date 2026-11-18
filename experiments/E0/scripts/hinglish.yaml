@@ -1,0 +1,8 @@
+name: hinglish
+voice: hi-IN-MadhurNeural
+transcribe_language: hi
+lines:
+  - text: "Haan, awaaz aa rahi hai."
+  - text: "Aap kaun ho? Kya aap Hindi mein baat kar sakte ho?"
+  - text: "Accha, mujhe kal Delhi jaana hai. Weather kaisa rehta hai November mein?"
+  - text: "Theek hai, thank you. Bye!"

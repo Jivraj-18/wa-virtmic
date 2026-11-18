@@ -5,7 +5,7 @@ Audio path (all 24 kHz mono s16le):
   caller  -> Chrome -> callout_sink.monitor -> parec  -> WebSocket input_audio_buffer.append
   model   -> response.output_audio.delta     -> pacat -> virtmic_sink -> virtmic -> Chrome mic -> caller
 
-Auth: the Straive LLM Foundry gateway cannot proxy WebSockets, so we ask it (plain HTTP) for a short-lived
+Auth: our OpenAI-compatible LLM gateway cannot proxy WebSockets, so we ask it (plain HTTP) for a short-lived
 OpenAI Realtime client secret (ek_...) and connect directly to wss://api.openai.com with that.
 
 Standalone test (talks through the virtual mic; no call needed):
@@ -14,7 +14,8 @@ Standalone test (talks through the virtual mic; no call needed):
 import argparse, asyncio, base64, json, os, threading, time, urllib.request, uuid
 from pathlib import Path
 
-from speak import load_env
+import gateway
+from gateway import load_env
 
 RATE = 24000
 CHUNK = RATE * 2 // 50  # 20 ms of s16le mono
@@ -33,15 +34,14 @@ GREETING = ("In English, greet the caller warmly in one short sentence, say you 
 
 
 def client_secret(instructions: str) -> str:
-    """Short-lived OpenAI Realtime key via the LLM Foundry gateway. A unique nonce defeats the gateway's cache."""
+    """Short-lived OpenAI Realtime key via the LLM gateway. A unique nonce defeats the gateway's response cache."""
     load_env()
     body = {"session": {"type": "realtime", "model": MODEL,
                         "instructions": f"{instructions}\n(session {uuid.uuid4().hex[:10]})"}}
     req = urllib.request.Request(
-        os.environ["LLMFOUNDRY_BASE"].rstrip("/") + "/openai/v1/realtime/client_secrets",
+        gateway.base() + "/openai/v1/realtime/client_secrets",
         data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {os.environ['LLMFOUNDRY_TOKEN']}:wa-virtmic",
-                 "Content-Type": "application/json"})
+        headers={**gateway.auth_header(), "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)["value"]
 
@@ -172,6 +172,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=float, default=30)
     ap.add_argument("--transcript")
+    ap.add_argument("--in-device", default="callout_sink.monitor", help="PulseAudio source carrying the caller's voice")
+    ap.add_argument("--out-device", default="virtmic_sink", help="PulseAudio sink feeding the call's microphone")
+    ap.add_argument("--instructions-file", help="system instructions (default: built-in test-call persona)")
     a = ap.parse_args()
-    ag = Agent(Path(a.transcript) if a.transcript else None)
+    kw = {"instructions": Path(a.instructions_file).read_text()} if a.instructions_file else {}
+    ag = Agent(Path(a.transcript) if a.transcript else None, in_device=a.in_device, out_device=a.out_device, **kw)
     asyncio.run(ag.run(a.seconds))

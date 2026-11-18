@@ -1,0 +1,10 @@
+name: interruption
+voice: en-IN-PrabhatNeural
+lines:
+  - text: "Hello, yes I can hear you."
+  - text: "Can you tell me a long story about a cat who travels around India? Take your time."
+  # starts while the agent is still telling the story
+  - text: "Sorry, stop, stop. Quick question instead: what is twelve times twelve?"
+    interrupt: true
+    after: 3.0
+  - text: "Thanks. That's all."

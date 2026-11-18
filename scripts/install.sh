@@ -6,5 +6,5 @@ wget -q -O "$tmp/chrome.deb" https://dl.google.com/linux/direct/google-chrome-st
 sudo apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$tmp/chrome.deb" pulseaudio pulseaudio-utils ffmpeg
 rm -rf "$tmp"
-pip install -q edge-tts numpy playwright websockets
+pip install -q edge-tts numpy playwright websockets pyyaml
 google-chrome --version

@@ -1,0 +1,7 @@
+name: basic_qa
+voice: en-IN-PrabhatNeural
+lines:
+  - text: "Hi! Yes, I can hear you clearly."
+  - text: "What is the capital of Japan?"
+  - text: "And roughly how many people live there?"
+  - text: "Great, thank you. Bye!"

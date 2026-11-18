@@ -1,0 +1,1 @@
+card({id: "E0", status: "DONE", title: "Simulated caller and test harness", finding: "A TTS caller tests the agent without a phone. gpt-realtime answered every turn with a median latency of about 1.2 s (caller stops talking until the AI speaks)."});

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>E0 · Simulated caller</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js"></script>
+<script src="media/E0/basic_qa.js"></script>
+<script src="media/E0/interruption.js"></script>
+<script src="media/E0/hinglish.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <nav class="top"><a href="index.html">← All experiments</a><span class="sep">|</span><span>E0</span></nav>
+  <div class="row"><h1>E0 · Simulated caller and test harness</h1><span class="badge DONE">DONE</span></div>
+
+  <h2><span class="n">1</span>The idea</h2>
+  <p>Testing a voice agent by asking a friend to call every time is slow and can't be repeated. E0 replaces the human
+    with a <strong>scripted TTS caller</strong>. It speaks lines from a YAML file, waits for the agent to answer,
+    can interrupt it on purpose, and measures how fast the agent responds. Every other experiment uses it.</p>
+
+  <h2><span class="n">2</span>How it works</h2>
+  <div class="panel diagram">
+    <svg viewBox="0 0 860 210" role="img" aria-label="sim_call.py plays caller lines into callout_TAG; the agent reads callout_TAG.monitor and plays into virtmic_TAG; both monitors are recorded">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" opacity=".6"/></marker></defs>
+      <rect class="hl" x="10" y="70" width="170" height="80" rx="10"/>
+      <text class="lbl" x="95" y="100" text-anchor="middle">sim_call.py</text><text class="sub" x="95" y="118" text-anchor="middle">YAML script → edge-tts</text><text class="sub" x="95" y="134" text-anchor="middle">VAD · metrics · recorder</text>
+      <rect class="box" x="250" y="20" width="160" height="56" rx="8"/>
+      <text class="lbl" x="330" y="44" text-anchor="middle">callout_&lt;tag&gt;</text><text class="sub" x="330" y="62" text-anchor="middle">null sink: caller voice</text>
+      <rect class="box" x="250" y="140" width="160" height="56" rx="8"/>
+      <text class="lbl" x="330" y="164" text-anchor="middle">virtmic_&lt;tag&gt;</text><text class="sub" x="330" y="182" text-anchor="middle">null sink: agent voice</text>
+      <rect class="hl" x="470" y="70" width="210" height="80" rx="10"/>
+      <text class="lbl" x="575" y="100" text-anchor="middle">Agent under test</text><text class="sub" x="575" y="118" text-anchor="middle">--in-device callout_&lt;tag&gt;.monitor</text><text class="sub" x="575" y="134" text-anchor="middle">--out-device virtmic_&lt;tag&gt;</text>
+      <rect class="box" x="720" y="70" width="130" height="80" rx="10"/>
+      <text class="lbl" x="785" y="100" text-anchor="middle">Voice model</text><text class="sub" x="785" y="118" text-anchor="middle">gpt-realtime</text>
+      <path class="ln c" d="M180,95 C215,95 220,48 248,48" marker-end="url(#ar)"/><text class="sub" x="186" y="62">paplay</text>
+      <path class="ln c" d="M410,48 C440,48 445,95 468,95" marker-end="url(#ar)"/>
+      <path class="ln a" d="M470,125 C440,125 440,168 412,168" marker-end="url(#ar)"/>
+      <path class="ln a" d="M248,168 C215,168 215,125 182,125" marker-end="url(#ar)"/><text class="sub" x="186" y="182">record + VAD</text>
+      <path class="ln" d="M680,110 L718,110" marker-end="url(#ar)" marker-start="url(#ar)"/>
+    </svg>
+  </div>
+  <p class="note">Each run makes its own pair of sinks (suffix <code>--tag</code>), so several experiments can test at once
+    without touching the real WhatsApp devices. Times are measured on the recorded audio itself, not the wall clock,
+    so dropped audio buffers can't skew the numbers.</p>
+
+  <h2><span class="n">3</span>Demo</h2>
+  <div id="demo"></div>
+  <script>renderDemo(document.getElementById("demo"), ["E0/basic_qa", "E0/interruption", "E0/hinglish"]);</script>
+
+  <h2><span class="n">4</span>Results</h2>
+  <p>Latency is measured from the moment the caller's voice ends to the agent's first audible sound. It includes the
+    model's end-of-turn detection (500 ms of silence), the network and generation time.</p>
+  <div id="sumtbl"></div>
+  <div id="chart" style="margin-top:14px"></div>
+  <h3>Per turn: interruption script</h3>
+  <div id="turns"></div>
+  <script>
+    const keys = ["E0/basic_qa", "E0/interruption", "E0/hinglish"];
+    const rows = keys.filter(k => RUNS[k]).map(k => ({name: k.split("/")[1].replace(/_/g, " "), ...RUNS[k].summary}));
+    renderTable(document.getElementById("sumtbl"), rows, [
+      {key: "name", label: "Script"}, {key: "turns", label: "Turns", num: true},
+      {key: "replied_turns", label: "Answered", num: true},
+      {key: "latency_median_s", label: "Median latency (s)", num: true},
+      {key: "latency_p90_s", label: "p90 latency (s)", num: true, fmt: v => v == null ? "–" : (+v).toFixed(2)},
+      {key: "barge_in_stop_median_s", label: "Stopped after barge-in (s)", num: true},
+    ]);
+    renderBars(document.getElementById("chart"), rows.map(r => ({label: r.name, value: r.latency_median_s, value2: r.latency_p90_s})),
+      {unit: " s", label1: "median latency", label2: "p90 latency", title: "Latency per script"});
+    renderRunMetrics(document.getElementById("turns"), "E0/interruption");
+  </script>
+
+  <h2><span class="n">5</span>What worked, what didn't, what's next</h2>
+  <div class="grid3">
+    <div><h3>Worked</h3><ul class="ok">
+      <li>All 12 caller turns across the 3 scripts got a sensible spoken answer.</li>
+      <li>Latency is steady: median 1.2–1.4 s, p90 under 1.5 s.</li>
+      <li>Barge-in works: the agent stopped about 1.5 s after the caller talked over its story, then answered the new question.</li>
+      <li>Asked in Hindi, the agent switched to Hindi and stayed there.</li>
+    </ul></div>
+    <div><h3>Didn't</h3><ul class="bad">
+      <li>Stopping after barge-in (about 1.5 s) is slow: the caller hears the agent talking over them.</li>
+      <li>The caller's natural pauses mid-sentence end the turn too early (500 ms silence), so some replies start and are then cut off.</li>
+      <li>Once, mid-story, the agent switched to Hindi on its own after a misheard caller phrase.</li>
+      <li>The transcriber writes some short Hindi phrases in Urdu script. This is a limit of speech-to-text, not of the agent.</li>
+    </ul></div>
+    <div><h3>Next</h3><ul class="next">
+      <li>Tune turn detection (longer silence, or "semantic" VAD) and compare in E3.</li>
+      <li>Pin the reply language unless the caller clearly switches.</li>
+      <li>Add a scripted-caller check of answer correctness, not just latency.</li>
+    </ul></div>
+  </div>
+
+  <h2><span class="n">6</span>How to run it</h2>
+<pre><code>bash scripts/install.sh            # once per container (apt + pip)
+bash scripts/audio_setup.sh        # PulseAudio daemon (idempotent)
+cp scripts/.env.example scripts/.env   # add your LLM gateway URL + token
+
+# run one scripted call against the realtime agent; --tag keeps sinks separate
+python3 scripts/sim_call.py experiments/E0/scripts/basic_qa.yaml --tag E0
+python3 scripts/sim_call.py experiments/E0/scripts/interruption.yaml --tag E0
+python3 scripts/sim_call.py experiments/E0/scripts/hinglish.yaml --tag E0
+
+# test any other agent: placeholders {in_device} {out_device} {transcript} {seconds} {python}
+python3 scripts/sim_call.py my.yaml --tag X --agent "{python} my_agent.py --in {in_device} --out {out_device}"
+
+# publish a run (≤ 60 s clip + transcript + metrics) to this site
+python3 scripts/publish_run.py experiments/runs/E0_basic_qa_&lt;ts&gt; --id E0</code></pre>
+  <p class="note">Output per run in <code>experiments/runs/&lt;tag&gt;_&lt;script&gt;_&lt;ts&gt;/</code>: <code>agent.wav</code>,
+    <code>caller.wav</code>, <code>call_stereo.wav</code>, <code>call.mp3</code>, <code>transcript.txt/json</code>,
+    <code>agent_transcript.txt</code>, <code>metrics.csv</code>, <code>summary.json</code>, <code>agent.log</code>.</p>
+</div>
+</body>
+</html>

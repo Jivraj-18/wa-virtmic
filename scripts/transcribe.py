@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Transcribe a WAV with Straive LLM Foundry (/openai/v1/audio/transcriptions).
+"""Transcribe a WAV via the OpenAI-compatible LLM gateway (/openai/v1/audio/transcriptions).
 Usage: transcribe.py file.wav [--model gpt-4o-transcribe]"""
 import argparse, json, os, uuid, urllib.request
-from speak import load_env
+import gateway
+from gateway import load_env
 
 def utterances(path: str, thresh: float = 200.0, gap: float = 0.8, min_len: float = 0.2):
     """Energy VAD: [(start_s, end_s)] of speech regions in a 16-bit mono WAV."""
@@ -29,7 +30,7 @@ def utterances(path: str, thresh: float = 200.0, gap: float = 0.8, min_len: floa
     return [(max(0, s - 0.2), e + 0.2) for s, e in regs if e - s >= min_len]
 
 
-def segments(path: str) -> list[dict]:
+def segments(path: str, language: str | None = "en") -> list[dict]:
     """Timestamped segments [{start,end,text}]: VAD-split the track, transcribe each utterance."""
     import subprocess, tempfile
     out = []
@@ -38,14 +39,14 @@ def segments(path: str) -> list[dict]:
             clip = f"{d}/u{i}.wav"
             subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{s:.2f}", "-to", f"{e:.2f}",
                             "-i", path, clip], check=True)
-            text = transcribe(clip).strip()
+            text = transcribe(clip, language=language).strip()
             if text:
                 out.append({"start": s, "end": e, "text": text})
     return out
 
 
-def transcribe(path: str, model: str = "gpt-4o-transcribe") -> str:
-    return _post(path, model, {"language": "en"})["text"]
+def transcribe(path: str, model: str = "gpt-4o-transcribe", language: str | None = "en") -> str:
+    return _post(path, model, {"language": language} if language else {})["text"]
 
 
 def _post(path: str, model: str, extra: dict) -> dict:
@@ -57,8 +58,8 @@ def _post(path: str, model: str, extra: dict) -> dict:
         f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n".encode(),
         open(path, "rb").read(), f"\r\n--{b}--\r\n".encode()])
     req = urllib.request.Request(
-        os.environ["LLMFOUNDRY_BASE"].rstrip("/") + "/openai/v1/audio/transcriptions", data=body,
-        headers={"Authorization": f"Bearer {os.environ['LLMFOUNDRY_TOKEN']}:wa-virtmic",
+        gateway.base() + "/openai/v1/audio/transcriptions", data=body,
+        headers={**gateway.auth_header(),
                  "Content-Type": f"multipart/form-data; boundary={b}"})
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.load(r)

@@ -9,3 +9,9 @@ scripts/transcript_*.txt
 scripts/call_ui_*.html
 *.log
 __pycache__/
+
+# experiment run folders (large wavs); publish small clips to docs/media with scripts/publish_run.py
+experiments/runs/
+# ...but the docs site's compressed demo clips are committed
+!docs/media/
+!docs/media/**

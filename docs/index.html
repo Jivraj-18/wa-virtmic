@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>wa-virtmic</title>
+<meta name="description" content="An AI voice answering WhatsApp calls through a virtual microphone, inside a GitHub Codespace: experiments and results.">
+<link rel="stylesheet" href="style.css">
+<script src="app.js"></script>
+<script src="cards/E0.js"></script><script src="cards/E1.js"></script><script src="cards/E2.js"></script>
+<script src="cards/E3.js"></script><script src="cards/E4.js"></script><script src="cards/E5.js"></script>
+<script src="cards/E6.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <nav class="top"><strong>wa-virtmic</strong><span class="sep">|</span><a href="https://github.com/Jivraj-18/wa-virtmic">GitHub repo</a></nav>
+  <h1>An AI voice that answers WhatsApp calls</h1>
+  <p class="lede">WhatsApp Web runs in a normal Chrome browser inside a cloud dev container (GitHub Codespace).
+    We replace that browser's microphone and speaker with virtual audio devices, so an AI voice model can hear the caller
+    and talk back on a real WhatsApp call, with no phone and no telephony provider.</p>
+
+  <h2>How it works</h2>
+  <div class="panel diagram">
+    <svg viewBox="0 0 900 285" role="img" aria-label="Architecture: caller's phone to WhatsApp Web in Chrome, PulseAudio virtual devices, voice agent, LLM gateway">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" opacity=".6"/></marker></defs>
+      <rect class="box" x="10" y="110" width="130" height="70" rx="10"/>
+      <text class="lbl" x="75" y="140" text-anchor="middle">Caller's phone</text><text class="sub" x="75" y="160" text-anchor="middle">WhatsApp app</text>
+      <rect class="box" x="190" y="40" width="250" height="210" rx="12"/>
+      <text class="lbl" x="315" y="64" text-anchor="middle">GitHub Codespace</text>
+      <rect class="hl" x="210" y="80" width="210" height="52" rx="8"/>
+      <text class="lbl" x="315" y="102" text-anchor="middle">Chrome + WhatsApp Web</text><text class="sub" x="315" y="120" text-anchor="middle">headed, on a noVNC desktop</text>
+      <rect class="box" x="210" y="160" width="100" height="70" rx="8"/>
+      <text class="lbl" x="260" y="186" text-anchor="middle">virtmic</text><text class="sub" x="260" y="204" text-anchor="middle">Chrome's mic</text><text class="sub" x="260" y="219" text-anchor="middle">(virtual)</text>
+      <rect class="box" x="320" y="160" width="100" height="70" rx="8"/>
+      <text class="lbl" x="370" y="186" text-anchor="middle">callout_sink</text><text class="sub" x="370" y="204" text-anchor="middle">Chrome's speaker</text><text class="sub" x="370" y="219" text-anchor="middle">(virtual)</text>
+      <rect class="hl" x="500" y="120" width="170" height="90" rx="10"/>
+      <text class="lbl" x="585" y="150" text-anchor="middle">Voice agent</text><text class="sub" x="585" y="170" text-anchor="middle">realtime_agent.py</text><text class="sub" x="585" y="187" text-anchor="middle">auto_answer.py (CDP)</text>
+      <rect class="box" x="730" y="110" width="160" height="110" rx="10"/>
+      <text class="lbl" x="810" y="140" text-anchor="middle">Voice model</text><text class="sub" x="810" y="160" text-anchor="middle">OpenAI gpt-realtime</text><text class="sub" x="810" y="178" text-anchor="middle">key via an OpenAI-</text><text class="sub" x="810" y="194" text-anchor="middle">compatible LLM gateway</text>
+      <path class="ln" d="M140,145 C165,145 180,106 208,106" marker-end="url(#ar)" marker-start="url(#ar)"/>
+      <text class="sub" x="20" y="100">WebRTC call</text>
+      <path class="ln c" d="M370,132 L370,158" marker-end="url(#ar)"/>
+      <path class="ln a" d="M260,158 L260,132" marker-end="url(#ar)"/>
+      <path class="ln c" d="M420,200 C460,200 470,180 498,180" marker-end="url(#ar)"/>
+      <text class="sub" x="430" y="222">caller audio</text>
+      <path class="ln a" d="M585,212 L585,272 L260,272 L260,234" marker-end="url(#ar)"/>
+      <text class="sub" x="455" y="266">AI voice</text>
+      <path class="ln" d="M670,165 L728,165" marker-end="url(#ar)" marker-start="url(#ar)"/>
+      <text class="sub" x="676" y="157">WebSocket</text>
+    </svg>
+  </div>
+  <p class="note">Caller audio leaves Chrome through the virtual speaker and is streamed to the voice model. The model's
+    spoken reply is played into the virtual sink that Chrome uses as its microphone. A Chrome DevTools Protocol (CDP)
+    script clicks <em>Accept</em> on incoming calls. For testing, E0 swaps the phone for a simulated TTS caller.</p>
+
+  <h2>Experiments</h2>
+  <div id="cards" class="cards"></div>
+  <script>renderCards(document.getElementById("cards"));</script>
+
+  <footer>All audio on this site comes from <strong>simulated</strong> calls (TTS caller, E0 harness). No real call
+    recordings, transcripts or contact details are published.</footer>
+</div>
+</body>
+</html>
