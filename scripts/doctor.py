@@ -195,7 +195,7 @@ def check_chrome():
 
 def check_auto_answer():
     r = run(["pgrep", "-af", r"scripts/auto_answer\.py"])
-    procs = [l for l in r.stdout.splitlines() if "pgrep" not in l]
+    procs = [l for l in r.stdout.splitlines() if len(l.split()) > 1 and "python" in l.split()[1]]
     if len(procs) == 1:
         report("PASS", "auto_answer.py", f"running (pid {procs[0].split()[0]})")
     elif len(procs) > 1:
