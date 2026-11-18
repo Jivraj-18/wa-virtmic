@@ -1,0 +1,21 @@
+{
+  "name": "whatsapp-virtmic",
+  // Same base image the Codespace was already using (universal 6.1.12).
+  "image": "mcr.microsoft.com/devcontainers/universal:6",
+  "features": {
+    "ghcr.io/devcontainers/features/desktop-lite:1": {
+      "password": "vscode",
+      "webPort": "6080",
+      "vncPort": "5901"
+    }
+  },
+  "forwardPorts": [6080],
+  "portsAttributes": {
+    "6080": {
+      "label": "noVNC desktop",
+      "onAutoForward": "notify"
+    }
+  },
+  // desktop-lite needs a bigger /dev/shm for Chrome to be stable.
+  "runArgs": ["--shm-size=1g"]
+}

@@ -1,0 +1,11 @@
+# secrets
+.env
+scripts/.env
+# call recordings, transcripts, logs, debug dumps (contain personal conversations)
+scripts/calls/
+*.wav
+*.mp3
+scripts/transcript_*.txt
+scripts/call_ui_*.html
+*.log
+__pycache__/
