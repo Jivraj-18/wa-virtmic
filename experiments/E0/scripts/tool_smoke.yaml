@@ -1,0 +1,5 @@
+name: tool_smoke
+voice: en-IN-PrabhatNeural
+lines:
+  - text: "Yes, I can hear you."
+  - text: "What is today's secret code?"
