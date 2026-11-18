@@ -13,7 +13,10 @@ caller ──▶ Chrome speaker ──▶ callout_sink (DEFAULT SINK) ──moni
 
 | File | Purpose |
 |---|---|
-| `install.sh` | apt: Google Chrome stable (.deb), pulseaudio, pulseaudio-utils, ffmpeg. pip: edge-tts, numpy, playwright |
+| `install.sh` | apt: Google Chrome stable (.deb), pulseaudio, pulseaudio-utils, ffmpeg. pip: edge-tts, numpy, playwright, websockets, pyyaml. Claude Code. Idempotent (devcontainer `postCreateCommand`) |
+| `demo.sh` | `make demo` / `make stop`: one-command start (audio, Chrome, auto_answer), noVNC URL, QR walk-through. `--dry-run` |
+| `doctor.py` | `make doctor`: read-only health check with a fix per failure. `--offline`, `--redact`, `--url`, `--wait-login SECS` |
+| `win_agent.py` | Windows path (untested): the same realtime agent with `sounddevice` I/O for WhatsApp Desktop + VB-Cable. See `WINDOWS.md` |
 | `audio_setup.sh` | Starts the PulseAudio user daemon and creates `virtmic_sink`, `virtmic`, `callout_sink`. Can be re-run safely |
 | `test_virtmic.sh` | Plays a 440 Hz tone into `virtmic_sink`, records 3 s from `virtmic`, prints RMS. `DUR=12 ./test_virtmic.sh -- CMD` records while CMD plays |
 | `rms.py` | Prints the RMS/dBFS of a WAV file |
@@ -31,15 +34,30 @@ caller ──▶ Chrome speaker ──▶ callout_sink (DEFAULT SINK) ──moni
 
 ## Run order
 
-1. **(manual, once)** The devcontainer already includes `desktop-lite`. Rebuild the container if `.devcontainer/` changed.
-2. **(manual)** Open the **Ports** tab, then open the forwarded URL for port **6080** (`https://<codespace>-6080.app.github.dev`). Click Connect and enter the password `vscode`.
-3. `bash scripts/install.sh`: run once after every container rebuild, because apt packages are not persisted.
-4. `bash scripts/audio_setup.sh`: run after every restart. Then `bash scripts/test_virtmic.sh`, which should print AUDIO PRESENT.
-5. `bash scripts/launch_chrome.sh`
-6. **(manual, first time only)** In noVNC, scan the WhatsApp QR code with your phone (WhatsApp > Linked devices > Link a device). Then check with `python3 scripts/cdp_eval.py status`, which should show `chatList: True`.
-7. `setsid nohup python3 -u scripts/auto_answer.py > scripts/auto_answer.log 2>&1 < /dev/null &`: answers and records every call (`--once` stops after one; `--mode greeting` plays the fixed greeting instead of the live agent). (Manual alternative: answer in noVNC Chrome, click Allow, then run `bash scripts/call_check.sh`.)
-8. **(manual)** Have someone WhatsApp voice-call this account. Don't answer on the phone.
-9. **(manual)** Ask the caller whether they heard the AI voice.
+One-command flow (E6). Every step is idempotent.
+
+1. **(automatic)** Creating/rebuilding the container runs `bash scripts/install.sh` (`postCreateCommand`: Chrome .deb, pulseaudio,
+   ffmpeg, Python modules, Claude Code; skips what is already installed). Every start runs `bash scripts/audio_setup.sh`
+   (`postStartCommand`). Both can be run by hand any time (`make install`, `make audio`).
+2. **(manual, once)** `cp scripts/.env.example scripts/.env` and fill in `LLM_GATEWAY_BASE` / `LLM_GATEWAY_TOKEN`.
+3. `make demo` (or `bash scripts/demo.sh`): runs `audio_setup.sh`, `launch_chrome.sh` (if Chrome isn't up yet) and
+   `auto_answer.py` in the background (log: `scripts/auto_answer.log`; not started twice), prints the noVNC URL, then watches the
+   WhatsApp login. `make demo-dry` / `--dry-run` only checks and prints what it would do.
+4. **(manual, first time only)** Open the printed noVNC URL (`https://<codespace>-6080.app.github.dev/vnc.html?autoconnect=true&resize=scale`,
+   also in the **Ports** tab, port 6080; password `vscode`). Scan the WhatsApp QR with your phone (WhatsApp > Linked devices >
+   Link a device). `make demo` prints "WhatsApp Web is logged in." when done.
+5. `make doctor` (`python3 scripts/doctor.py`): read-only PASS/WARN/FAIL for PulseAudio, devices, noVNC, Chrome CDP, WhatsApp
+   login, auto_answer, `.env`, gateway, a realtime key and `api.openai.com`, with the exact fix for each failure.
+6. **(manual)** Have someone WhatsApp voice-call this account. Don't answer on the phone. Ask whether they heard the AI voice.
+7. `make stop` stops `auto_answer.py` (Chrome keeps running; `bash scripts/demo.sh stop --chrome` closes it too).
+
+Without a phone: `make sim` (E0 `basic_qa` simulated call on private sinks; `TAG=...` names the run).
+
+Manual equivalents (what `make demo` runs): `bash scripts/install.sh`, `bash scripts/audio_setup.sh` (then `bash scripts/test_virtmic.sh`
+should print AUDIO PRESENT), `bash scripts/launch_chrome.sh`, `python3 scripts/cdp_eval.py status` (`chatList: True` once logged in),
+`setsid nohup python3 -u scripts/auto_answer.py > scripts/auto_answer.log 2>&1 < /dev/null &` (`--once` stops after one call;
+`--mode greeting` plays the fixed greeting instead of the live agent). Manual alternative to auto-answer: answer in noVNC Chrome,
+click Allow, then run `bash scripts/call_check.sh`.
 
 ## Verified results
 

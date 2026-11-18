@@ -17,5 +17,13 @@
     }
   },
   // desktop-lite needs a bigger /dev/shm for Chrome to be stable.
-  "runArgs": ["--shm-size=1g"]
+  "runArgs": ["--shm-size=1g"],
+  // Once, after the container is created: Chrome .deb, PulseAudio, ffmpeg, Python modules, Claude Code.
+  // install.sh is idempotent (skips whatever is already installed), so a re-run is cheap.
+  "postCreateCommand": "bash scripts/install.sh",
+  // Every start (PulseAudio and its virtual devices don't survive a restart). Never fails the start;
+  // `make doctor` reports any problem with the fix.
+  "postStartCommand": "bash scripts/audio_setup.sh > /tmp/wa-audio-setup.log 2>&1 || true",
+  // Shown in the terminal once the container is ready.
+  "postAttachCommand": "echo 'wa-virtmic: run  make demo  (or bash scripts/demo.sh), then  make doctor  to check everything'"
 }

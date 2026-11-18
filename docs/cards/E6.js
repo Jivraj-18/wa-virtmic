@@ -1,1 +1,1 @@
-card({id: "E6", status: "PENDING", title: "One-command setup for demos", finding: "Not started yet."});
+card({id: "E6", status: "DONE", title: "One-command setup for demos", finding: "make demo starts audio, Chrome and the auto-answerer and walks through the QR scan; make doctor checks 15 things read-only with a fix for each (all pass here). Container rebuild and the Windows path are untested."});
