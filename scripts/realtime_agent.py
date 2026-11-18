@@ -133,7 +133,11 @@ class Agent:
                 "type": "realtime", "instructions": self.instructions,
                 "audio": {
                     "input": {"format": {"type": "audio/pcm", "rate": RATE},
-                              "turn_detection": {"type": "server_vad", "threshold": 0.5,
+                              # near-field noise reduction + a slightly higher VAD threshold: on a real call,
+                              # line noise was being transcribed as speech and triggered replies / cut-offs
+                              "noise_reduction": {"type": os.environ.get("REALTIME_NOISE_REDUCTION", "near_field")},
+                              "turn_detection": {"type": "server_vad",
+                                                 "threshold": float(os.environ.get("REALTIME_VAD_THRESHOLD", "0.6")),
                                                  "prefix_padding_ms": 300, "silence_duration_ms": 500},
                               "transcription": {"model": "gpt-4o-transcribe"}},
                     "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": VOICE}}}

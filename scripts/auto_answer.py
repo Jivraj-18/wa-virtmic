@@ -13,7 +13,7 @@ How it works (via CDP on :9222, Chrome started by launch_chrome.sh):
      Recording stops when the call UI and Chrome's mic stream are gone for 3 s.
 On first detection it dumps the call UI HTML to call_ui_<ts>.html for debugging selectors.
 """
-import argparse, json, re, signal, subprocess, sys, time
+import argparse, asyncio, json, os, re, signal, subprocess, sys, threading, time
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -21,7 +21,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from speak import play_wav, synth_wav  # noqa: E402
 from transcribe import segments  # noqa: E402
-from realtime_agent import Agent  # noqa: E402
+from realtime_agent import INSTRUCTIONS, Agent  # noqa: E402
 
 CALLS = HERE / "calls"
 
@@ -37,7 +37,7 @@ FIND_ACCEPT_JS = r"""() => {
     if (re.test(label) && el.offsetParent !== null) {
       el.setAttribute('data-autoanswer', '1');
       const box = el.closest('[role="dialog"], [data-animate-modal-popup], section, div[tabindex]') || el.parentElement;
-      return {found: true, label, html: (box || el).outerHTML.slice(0, 20000)};
+      return {found: true, label, html: (box || el).outerHTML.slice(0, 20000), text: (box || el).innerText || ''};
     }
   }
   const txt = document.body ? document.body.innerText : '';
@@ -81,6 +81,24 @@ def fix_routing() -> bool:
     log("chrome source-outputs:", client_streams("source-outputs"), "sink-inputs:", client_streams("sink-inputs"))
     return bool(outs)
 
+
+END_CALL_JS = r"""() => {
+  const re = /^(end call|end|hang up|leave call|leave)$/i;
+  const ctrls = [...document.querySelectorAll('button, [role="button"]')].filter(el => el.offsetParent !== null);
+  for (const el of ctrls) {
+    const l = (el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || '').trim();
+    if (re.test(l)) { el.click(); return 'label:' + l; }
+  }
+  const bar = document.querySelector('[aria-label="Call controls"]');
+  if (bar) for (const el of bar.querySelectorAll('button, [role="button"]'))
+    if (el.innerHTML.includes('call-end')) { el.click(); return 'icon:call-end'; }
+  return null;
+}"""
+
+END_CALL_TOOL = {"type": "function", "name": "end_call",
+                 "description": "Hang up the WhatsApp call. Use ONLY when the caller asks you to end/cut the call or "
+                                "clearly says goodbye. Say a short goodbye first, then call this.",
+                 "parameters": {"type": "object", "properties": {}}}
 
 CALL_ACTIVE_JS = """() => !!document.querySelector('[aria-label="Call controls"], [aria-label="End call"], [aria-label="Mute microphone"]')"""
 
@@ -128,8 +146,19 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime"):
 
     time.sleep(1.0)
     agent = th = None
+    hangup = threading.Event()
+
+    async def on_tool(name, args, ag):
+        if name == "end_call":
+            await asyncio.sleep(2.5)  # let the goodbye finish playing
+            hangup.set()
+            return {"ok": True, "status": "hanging up"}
+        return {"error": f"unknown tool {name}"}
+
     if mode == "realtime":
-        agent = Agent(transcript=d / "transcript_live.txt", log=log)
+        agent = Agent(transcript=d / "transcript_live.txt", log=log, tools=[END_CALL_TOOL], on_tool=on_tool,
+                      instructions=INSTRUCTIONS + "\nIf the caller asks you to end or cut the call, say a one-line "
+                                   "goodbye and then call the end_call tool.")
         th = agent.start_thread(max_secs)
         th.join(10)  # the thread only exits early if the realtime session failed
         if not th.is_alive():
@@ -140,7 +169,20 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime"):
         play_wav(greeting)
 
     gone = 0
+    dumped = clicked = False
     while time.time() - t0 < max_secs:  # record until hang-up (call UI + Chrome mic both gone for 3 s)
+        if not dumped:  # keep a copy of the in-call UI for selector debugging (local, git-ignored)
+            try:
+                (HERE / "call_ui_incall.html").write_text(page.content()); dumped = True
+            except Exception:
+                pass
+        if hangup.is_set() and not clicked:
+            try:
+                how = page.evaluate(END_CALL_JS)
+            except Exception as e:
+                how = f"error {e}"
+            log(f"end_call requested by the agent -> clicked: {how}")
+            clicked = True
         gone = 0 if call_active(page) else gone + 1
         if gone >= 6:
             break
@@ -206,6 +248,12 @@ def main():
                     log("page says 'incoming call' but no Accept button matched - dumping UI")
                     (HERE / f"call_ui_{time.strftime('%H%M%S')}.html").write_text(p.content())
                     warned = True
+                only = os.environ.get("ANSWER_ONLY", "").strip()  # optional: answer only callers whose name contains this
+                if r.get("found") and only and only.lower() not in r.get("text", "").lower():
+                    if not warned:
+                        log("incoming call from someone not matching ANSWER_ONLY - ignoring (not answered, not recorded)")
+                        warned = True
+                    continue
                 if r.get("found"):
                     log(f"incoming call! clicking '{r['label']}'")
                     (HERE / "call_ui_last.html").write_text(r["html"])
