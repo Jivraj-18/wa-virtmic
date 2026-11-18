@@ -288,6 +288,7 @@ class E2Session:
         self.next_kind = []                 # labels for the next response.created events (filler/answer)
         self.turn_stopped = None            # wall time of the last caller speech_stopped
         self.turn_audio = False             # agent audio produced since that speech_stopped
+        self.q_end = 0.0                    # wall time when the audio queued to the player runs out
         self.n = 0
 
     # ---- logging ------------------------------------------------------------
@@ -304,7 +305,8 @@ class E2Session:
         ty = m.get("type")
         if ty == "response.created":
             rid = m.get("response", {}).get("id")
-            kind = self.next_kind.pop(0) if self.next_kind else "auto"
+            meta = m.get("response", {}).get("metadata") or {}
+            kind = meta.get("e2") or (self.next_kind.pop(0) if self.next_kind else "auto")
             self.active, self.cur = True, rid
             self.idle.clear()
             self.resp[rid] = {"kind": kind, "created": time.time(), "first_audio": None, "audio_s": 0.0}
@@ -315,7 +317,9 @@ class E2Session:
                 if r["first_audio"] is None:
                     r["first_audio"] = time.time()
                     self.ev("first_audio", id=m.get("response_id"), kind=r["kind"])
-                r["audio_s"] += len(m.get("delta", "")) * 3 / 4 / 2 / 24000
+                d = len(m.get("delta", "")) * 3 / 4 / 2 / 24000
+                r["audio_s"] += d
+                self.q_end = max(self.q_end, time.time()) + d
             self.turn_audio = True
         elif ty in ("response.output_audio_transcript.done", "response.audio_transcript.done"):
             self.ev("transcript", id=m.get("response_id"), text=m.get("transcript", ""))
@@ -331,6 +335,7 @@ class E2Session:
             self.turn_stopped, self.turn_audio = time.time(), False
             self.ev("speech_stopped", audio_end_ms=m.get("audio_end_ms"))
         elif ty == "input_audio_buffer.speech_started":
+            self.q_end = time.time()  # the agent flushes its player on barge-in
             self.ev("speech_started")
         elif ty == "error":
             self.ev("error", error=m.get("error"))
@@ -344,13 +349,20 @@ class E2Session:
         except asyncio.TimeoutError:
             pass
 
-    async def speak(self, agent, instructions, kind):
-        """Ask for a short spoken line without tools; waits until no response is active (API rule)."""
+    async def speak(self, agent, instructions, kind, still_needed=lambda: True) -> bool:
+        """Speak a holding line as an OUT-OF-BAND response (conversation "none", fixed input): the model can't see
+        the caller's question there, so it can't make up an answer while the tool is still running (it did once
+        with an in-conversation response). Waits until no response is active (API rule); skipped if no longer needed."""
         await self.wait_idle()
-        self.next_kind.append(kind)
+        if not still_needed():
+            return False
         self.ev("speak_request", kind=kind)
-        await agent.send({"type": "response.create",
-                          "response": {"instructions": instructions, "tool_choice": "none"}})
+        await agent.send({"type": "response.create", "response": {
+            "conversation": "none", "metadata": {"e2": kind}, "output_modalities": ["audio"], "tool_choice": "none",
+            "instructions": instructions,
+            "input": [{"type": "message", "role": "user",
+                       "content": [{"type": "input_text", "text": "(say the holding line now)"}]}]}})
+        return True
 
     # ---- tool handler (Agent on_tool) -----------------------------------------
     async def on_tool(self, name, args, agent):
@@ -371,17 +383,19 @@ class E2Session:
             await self.wait_idle()               # let the response that carried the function call finish
             if task.done():
                 return
+            running = lambda: not task.done()
             if self.turn_audio:                  # the model already said "let me check" itself
                 rec["fillers"].append({"source": "model"})
-            else:
+            elif await self.speak(agent, FILLER, "filler", running):
                 rec["fillers"].append({"source": "forced", "t": round(time.time(), 3)})
-                await self.speak(agent, FILLER, "filler")
             for _ in range(STILL_MAX):
-                await asyncio.sleep(STILL_EVERY)
+                await asyncio.sleep(1.0)
+                while running() and (self.active or time.time() < self.q_end + STILL_EVERY):
+                    await asyncio.sleep(0.25)    # STILL_EVERY s of silence after the last line finished playing
                 if task.done():
                     return
-                rec["fillers"].append({"source": "still", "t": round(time.time(), 3)})
-                await self.speak(agent, STILL, "still")
+                if await self.speak(agent, STILL, "still", running):
+                    rec["fillers"].append({"source": "still", "t": round(time.time(), 3)})
 
         filler = asyncio.create_task(keep_engaged())
         try:
