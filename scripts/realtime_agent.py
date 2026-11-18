@@ -145,7 +145,8 @@ class Agent:
             mic = await asyncio.create_subprocess_exec(
                 "parec", f"--device={self.in_device}", "--raw", "--format=s16le", f"--rate={RATE}",
                 "--channels=1", "--latency-msec=20", stdout=asyncio.subprocess.PIPE)
-            await ws.send(json.dumps({"type": "response.create", "response": {"instructions": self.greeting}}))
+            if self.greeting:  # greeting=None/"" -> stay silent until spoken to (E4 meeting agent)
+                await ws.send(json.dumps({"type": "response.create", "response": {"instructions": self.greeting}}))
             self.t_first_req = time.time()
 
             async def pump_mic():

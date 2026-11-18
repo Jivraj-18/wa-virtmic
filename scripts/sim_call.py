@@ -22,6 +22,7 @@ Script format (YAML)
   lines:
     - text: "Yes, I can hear you."
       pause: 0.5                      # seconds to wait after the agent finished (default 0.6)
+      reply_timeout: 4                # wait at most 4 s for a reply to this line (default --reply-timeout)
     - text: "Stop, stop. What's two plus two?"
       interrupt: true                 # start while the agent is talking...
       after: 2.0                      # ...this many seconds after it started its reply (default 2.0)
@@ -288,8 +289,9 @@ def main():
                         else:
                             time.sleep(float(ln.get("after", 2.0)))
                     else:
-                        if turns:
-                            wait_reply(agent_tr, turns[-1]["caller_end"], a.reply_timeout, a.silence)
+                        if turns:  # per-line reply_timeout: how long the PREVIOUS line waits for a reply
+                            wait_reply(agent_tr, turns[-1]["caller_end"],
+                                       float(lines[i - 1].get("reply_timeout", a.reply_timeout)), a.silence)
                         time.sleep(float(ln.get("pause", 0.6)))
                     a_cs, c_cs = agent_tr.now(), caller_tr.now()
                     subprocess.run(["paplay", f"--device={sk.caller_sink}", str(clip)], check=True)

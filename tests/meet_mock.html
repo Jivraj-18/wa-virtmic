@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Minimal stand-in for the Google Meet pre-join + in-call DOM, used by test_meet_browser.py (no real Meet). -->
+<title>Mock Meet</title>
+<div id="prejoin">
+  <input placeholder="Your name">
+  <button aria-label="Turn off camera (ctrl + e)" onclick="log.push('cam_off');this.setAttribute('aria-label','Turn on camera (ctrl + e)')">cam</button>
+  <button aria-label="Turn on microphone (ctrl + d)" onclick="log.push('mic_on');this.setAttribute('aria-label','Turn off microphone (ctrl + d)')">mic</button>
+  <button onclick="log.push('other')">Other ways to join</button>
+  <button onclick="join()">Ask to join</button>
+</div>
+<div id="call" hidden>
+  <button aria-label="Chat with everyone" onclick="document.getElementById('chat').hidden=false">chat</button>
+  <button aria-label="Leave call" onclick="log.push('left')">leave</button>
+  <div id="chat" hidden>
+    <textarea aria-label="Send a message" onkeydown="if(event.key==='Enter'){event.preventDefault();sent.push(this.value);this.value=''}"></textarea>
+  </div>
+</div>
+<script>
+  window.log = []; window.sent = [];
+  function join() {
+    log.push('join:' + document.querySelector('input').value);
+    document.getElementById('prejoin').innerHTML = '<div>Asking to be let in...</div>';
+    setTimeout(() => { document.getElementById('call').hidden = false; }, 1500);  // host admits after 1.5 s
+  }
+</script>
