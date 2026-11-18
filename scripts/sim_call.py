@@ -25,6 +25,10 @@ Script format (YAML)
     - text: "Stop, stop. What's two plus two?"
       interrupt: true                 # start while the agent is talking...
       after: 2.0                      # ...this many seconds after it started its reply (default 2.0)
+    - text: "What's the total cost?"
+      reply_timeout: 40               # optional: max wait for the agent's reply to this line (default --reply-timeout)
+      until_quiet: 20                 # optional: after the reply, keep following further agent speech (e.g. a filler
+                                      # "let me check" and then the real answer) until it is quiet for this many s
 
 Agent command template placeholders: {in_device} {out_device} {transcript} {seconds} {python} {tag}
 """
@@ -194,6 +198,15 @@ def wait_reply(agent: Track, since: float, timeout: float, silence: float) -> tu
     return first
 
 
+def wait_turn(agent: Track, since: float, ln: dict, timeout: float, silence: float):
+    """wait_reply for one caller line, honouring its optional reply_timeout / until_quiet keys."""
+    first = wait_reply(agent, since, float(ln.get("reply_timeout", timeout)), silence)
+    if ln.get("until_quiet"):
+        while wait_reply(agent, agent.now(), float(ln["until_quiet"]), silence) is not None:
+            pass
+    return first
+
+
 def turn_metrics(agent: Track, turns, silence: float, shift: float = 0.0):
     t, r = agent.frames()
     on = r > VAD_RMS
@@ -289,7 +302,7 @@ def main():
                             time.sleep(float(ln.get("after", 2.0)))
                     else:
                         if turns:
-                            wait_reply(agent_tr, turns[-1]["caller_end"], a.reply_timeout, a.silence)
+                            wait_turn(agent_tr, turns[-1]["caller_end"], lines[i - 1], a.reply_timeout, a.silence)
                         time.sleep(float(ln.get("pause", 0.6)))
                     a_cs, c_cs = agent_tr.now(), caller_tr.now()
                     subprocess.run(["paplay", f"--device={sk.caller_sink}", str(clip)], check=True)
@@ -305,7 +318,7 @@ def main():
                                   "t0": g0})
                     log(f"turn {i + 1}{' (interrupt)' if interrupt else ''}: caller spoke {ve - vs:.1f}s: {ln['text']}")
                 if turns:
-                    wait_reply(agent_tr, turns[-1]["caller_end"], a.reply_timeout, a.silence)
+                    wait_turn(agent_tr, turns[-1]["caller_end"], lines[len(turns) - 1], a.reply_timeout, a.silence)
                 time.sleep(1.0)
             finally:
                 try:

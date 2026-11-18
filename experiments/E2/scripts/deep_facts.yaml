@@ -1,0 +1,23 @@
+name: deep_facts
+voice: en-IN-PrabhatNeural
+# single facts buried deep in experiments/E2/context/knowledge (search_knowledge / read_file)
+# expected answers: 9 February 2027 | $2,340 per drone per year | Ravi Menon, by 20 November | 18 months
+lines:
+  - text: "Hi, yes I can hear you."
+  - text: "When is the firmware freeze for the Kestrel K2?"
+    expect: ["9 february 2027"]
+    reply_timeout: 30
+    until_quiet: 6
+  - text: "Okay. How much does the Fleet plan cost per drone per year?"
+    expect: ["2340"]
+    reply_timeout: 30
+    until_quiet: 6
+  - text: "Who has to file the noise certification paperwork, and by when?"
+    expect: ["ravi menon", "20 november"]
+    reply_timeout: 30
+    until_quiet: 6
+  - text: "And how long is the standard warranty?"
+    expect: ["18 months"]
+    reply_timeout: 30
+    until_quiet: 6
+  - text: "Perfect, thanks. Bye!"
