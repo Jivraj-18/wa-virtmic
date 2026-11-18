@@ -2,142 +2,46 @@ window.RUNS = window.RUNS || {};
 window.RUNS["E4/meeting_hard"] = {
  "transcript": [
   {
-   "t": 1.63,
-   "end": 2.81,
-   "who": "CALLER",
-   "text": "Morning all"
-  },
-  {
-   "t": 3.4,
-   "end": 7.46,
-   "who": "CALLER",
-   "text": "Agenda today is the database migration and the rollout plan for Friday."
-  },
-  {
-   "t": 12.88,
-   "end": 16.88,
-   "who": "CALLER",
-   "text": "Maria, can you share your screen with the migration checklist?"
-  },
-  {
-   "t": 22.33,
-   "end": 24.02,
-   "who": "CALLER",
-   "text": "Sure, sharing now."
-  },
-  {
-   "t": 24.58,
-   "end": 28.28,
-   "who": "CALLER",
-   "text": "Steps one to four are done, step five is the data backfill."
-  },
-  {
-   "t": 33.79,
-   "end": 37.7,
-   "who": "CALLER",
-   "text": "What do you all think, is the backfill safe to run during business hours?"
-  },
-  {
-   "t": 43.21,
-   "end": 48.47,
-   "who": "CALLER",
-   "text": "Maya's summary from last week said the backfill locks the Orders table for a few minutes."
-  },
-  {
-   "t": 53.41,
-   "end": 58.79,
-   "who": "CALLER",
-   "text": "Okay Maya, quick one, how long would a rollback take if the backfill fails?"
-  },
-  {
-   "t": 60.25,
-   "end": 72.23,
-   "who": "AGENT",
-   "text": "Based on what I know, a rollback could take around the same time as the changes made so far, maybe a few minutes if the backfill is partway. But it depends on the volume of data changed; larger sets can cause longer rollbacks."
-  },
-  {
-   "t": 73.9,
-   "end": 74.75,
-   "who": "CALLER",
-   "text": "Right."
-  },
-  {
-   "t": 75.34,
-   "end": 78.68,
-   "who": "CALLER",
-   "text": "Ravi, what do you think, can we run it at night instead?"
-  },
-  {
-   "t": 84.13,
-   "end": 85.43,
-   "who": "CALLER",
-   "text": "Night is fine."
-  },
-  {
-   "t": 85.99,
-   "end": 90.89,
-   "who": "CALLER",
-   "text": "I think Maya and the on-call team should get the runbook before Friday."
-  },
-  {
-   "t": 96.34,
-   "end": 101.45,
+   "t": 4.34,
+   "end": 9.45,
    "who": "CALLER",
    "text": "Maya, can you walk us through a step-by-step rollout plan for Friday, with all the checkpoints?"
   },
   {
-   "t": 102.91,
-   "end": 106.43,
+   "t": 10.91,
+   "end": 14.43,
    "who": "AGENT",
    "text": "Sure, let's outline the rollout plan step by step."
   },
   {
-   "t": 106.18,
-   "end": 113.33,
+   "t": 14.18,
+   "end": 21.33,
    "who": "CALLER",
    "text": "Wait, wait. Ravi, sorry, quick question for you. Is the staging copy of the database ready?"
   },
   {
-   "t": 118.27,
-   "end": 121.55,
+   "t": 26.27,
+   "end": 29.55,
    "who": "CALLER",
    "text": "Yes, staging was refreshed this morning."
   },
   {
-   "t": 127.09,
-   "end": 130.64,
+   "t": 35.09,
+   "end": 38.64,
    "who": "CALLER",
    "text": "Can you ask Maya to send the checklist to everyone after the call?"
   },
   {
-   "t": 136.12,
-   "end": 139.4,
+   "t": 44.12,
+   "end": 47.4,
    "who": "CALLER",
    "text": "What would you recommend as the go or no-go signal, Maya?"
   },
   {
-   "t": 140.92,
-   "end": 157.04,
+   "t": 48.92,
+   "end": 65.04,
    "who": "AGENT",
    "text": "A good go or no-go signal could be successful completion of the data backfill on the staging environment, with no critical errors, and confirmation from the team that performance and order processing remain stable. Once we tick those boxes, we can safely proceed."
-  },
-  {
-   "t": 158.74,
-   "end": 159.5,
-   "who": "CALLER",
-   "text": "Good"
-  },
-  {
-   "t": 160.06,
-   "end": 161.51,
-   "who": "CALLER",
-   "text": "Let's wrap up there."
-  },
-  {
-   "t": 162.19,
-   "end": 163.43,
-   "who": "CALLER",
-   "text": "Thanks everyone!"
   }
  ],
  "metrics": [

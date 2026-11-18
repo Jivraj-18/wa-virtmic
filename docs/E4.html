@@ -16,7 +16,7 @@
   <div class="row"><h1>E4 · Google Meet agent "Maya"</h1><span class="badge PARTIAL">PARTIAL</span></div>
 
   <h2><span class="n">1</span>The idea</h2>
-  <p>Maya sits in a Google Meet as one more participant with her own Google account. She <strong>listens silently</strong>
+  <p>Maya sits in a Google Meet as one more participant (joining as a guest, or with her own Google account). She <strong>listens silently</strong>
     and keeps a live transcript. She <strong>speaks only when someone addresses her by name</strong> ("Maya, what do you
     think?"), and <strong>goes quiet at once</strong> when someone talks over her. Every few minutes at most, she may post
     a short suggestion in the Meet chat ("Maybe consider X", "You seem stuck on Y").</p>
@@ -60,6 +60,7 @@
 
   <h2><span class="n">3</span>Demo</h2>
   <div id="demo"></div>
+  <p class="note">Clips are 60-second excerpts of the 3-minute simulated meetings (the second starts at 1:32).</p>
   <script>renderDemo(document.getElementById("demo"), ["E4/meeting", "E4/meeting_hard"]);</script>
   <p class="note">Simulated meeting (E0 harness): four edge-tts voices play the participants (shown as "CALLER"), and Maya is
     "AI AGENT". The transcript is the harness's own speech-to-text of the recording. It once wrote an English line in
@@ -109,7 +110,7 @@
       <li>The Meet join, chat and leave code passed against a local mock Meet page in headless Chrome.</li>
     </ul></div>
     <div><h3>Didn't / not yet</h3><ul class="bad">
-      <li><strong>Not yet tested in a real Google Meet.</strong> That needs a separate Google account logged in by hand, and a meeting link.</li>
+      <li><strong>Not yet tested in a real Google Meet.</strong> That only needs a meeting link: Maya joins as a guest and the host admits her.</li>
       <li>The Meet selectors are best-effort and were checked only against a mock page. Meet changes its DOM often.</li>
       <li>The local VAD will also stop Maya for coughs or background noise. In a real meeting the threshold may need tuning.</li>
       <li>Some suggestions repeat a theme. Once, a suggestion promised a task ("I'll send the checklist"); the prompt now forbids that.</li>
@@ -134,7 +135,8 @@ python3 scripts/sim_call.py experiments/E4/scripts/meeting.yaml --tag E4 --greet
            --transcript {transcript} --seconds {seconds} --suggest-first 30 --suggest-interval 45"
 python3 -m scripts.meet.score_sim experiments/runs/E4_meeting_&lt;ts&gt; experiments/E4/scripts/meeting.yaml
 
-# real Meet (needs a person: a separate Google account and a meeting link)
+# real Meet (needs a meeting link; Maya joins as a guest named "Maya", the host admits her)
+# `maya login` is optional: only if you want her on a Google account instead of as a guest
 python3 -m scripts.meet.maya devices up      # maya_out, maya_mic_sink, maya_mic
 python3 -m scripts.meet.maya login           # Maya's Chrome on the noVNC desktop -> log in by hand
 python3 -m scripts.meet.maya join https://meet.google.com/xxx-yyyy-zzz

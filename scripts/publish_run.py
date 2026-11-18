@@ -19,6 +19,7 @@ def main():
     ap.add_argument("--id", required=True)
     ap.add_argument("--name")
     ap.add_argument("--max-seconds", type=float, default=60)
+    ap.add_argument("--start", type=float, default=0, help="clip start (s) inside the run; transcript times are shifted")
     a = ap.parse_args()
     run = Path(a.run)
     summ = json.loads((run / "summary.json").read_text())
@@ -28,10 +29,11 @@ def main():
     out = ROOT / "docs" / "media" / a.id
     out.mkdir(parents=True, exist_ok=True)
     src = run / "call_stereo.wav"
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(src), "-t", str(a.max_seconds),
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", str(a.start), "-i", str(src), "-t", str(a.max_seconds),
                     "-ac", "1", "-ar", "24000", "-b:a", "32k", str(out / f"{name}.mp3")], check=True)
     tr = json.loads((run / "transcript.json").read_text()) if (run / "transcript.json").exists() else []
-    tr = [x for x in tr if x["t"] <= a.max_seconds]
+    tr = [dict(x, t=round(x["t"] - a.start, 2), end=round(x["end"] - a.start, 2))
+          for x in tr if a.start <= x["t"] <= a.start + a.max_seconds]
     rows = list(csv.DictReader(open(run / "metrics.csv"))) if (run / "metrics.csv").exists() else []
     data = {"transcript": tr, "metrics": rows, "summary": summ, "clip": f"media/{a.id}/{name}.mp3"}
     (out / f"{name}.js").write_text(

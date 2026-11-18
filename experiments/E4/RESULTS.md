@@ -1,7 +1,7 @@
 # E4 results: Google Meet agent "Maya"
 
 **Status: PARTIAL** (2026-11-18). Built and tested on simulated meetings; the real Google Meet test is **BLOCKED** on the user
-(a separate Google account logged in by hand + a Meet URL). Site page: `docs/E4.html`.
+(a Meet URL; Maya joins as a guest and the host admits her. A Google account is optional). Site page: `docs/E4.html`.
 
 ## 1. Research: reuse an open-source meeting bot, or our own stack?
 
@@ -118,3 +118,7 @@ Steps:
 5. If a button isn't found: `python3 -m scripts.meet.maya probe` prints the visible buttons; adjust `RX` in
    `scripts/meet/browser.py`. Output (transcript, events) goes to `~/maya_meetings/<ts>/` (outside the repo).
 6. `python3 -m scripts.meet.maya leave`, then `python3 -m scripts.meet.maya devices down` when done.
+
+
+## Update (coordinator, after merge)
+Google Meet allows **guest** joins, and `browser.join_meet` already handles them: with no login it types the guest name and clicks *Ask to join*. So the real test only needs a meeting link and the host admitting Maya; `maya login` is optional. The demo clips were re-cut to 60 s (`publish_run.py --start`).
