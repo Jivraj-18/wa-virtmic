@@ -164,7 +164,8 @@ RX = {
     "name": re.compile(r"name", re.I),
     "cam_off": re.compile(r"^turn off camera", re.I),
     "mic_on": re.compile(r"^turn on (microphone|mic)", re.I),
-    "join": re.compile(r"^(join now|ask to join|join)$", re.I),
+    # real Meet labels the button "Join now without camera" / "Ask to join without camera" when no camera exists
+    "join": re.compile(r"^(join now|ask to join|join)( without (camera|microphone|camera and microphone))?$", re.I),
     "leave": re.compile(r"^leave call", re.I),
     "lobby": re.compile(r"asking to be let in|someone .{0,30}let you in|wait for the host", re.I),
     "chat": re.compile(r"^chat with everyone|^chat\b", re.I),
@@ -260,6 +261,15 @@ async def connect(port=PORT):
     pw = await async_playwright().start()
     browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
     ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+    try:  # mic + speaker access for Meet without a permission prompt (Maya's own Chrome only)
+        cdp = await browser.new_browser_cdp_session()
+        await cdp.send("Browser.grantPermissions", {"origin": "https://meet.google.com",
+                                                    "permissions": ["audioCapture", "speakerSelection"]})
+    except Exception:
+        try:
+            await cdp.send("Browser.grantPermissions", {"origin": "https://meet.google.com", "permissions": ["audioCapture"]})
+        except Exception:
+            pass
     return pw, browser, ctx
 
 

@@ -122,3 +122,32 @@ Steps:
 
 ## Update (coordinator, after merge)
 Google Meet allows **guest** joins, and `browser.join_meet` already handles them: with no login it types the guest name and clicks *Ask to join*. So the real test only needs a meeting link and the host admitting Maya; `maya login` is optional. The demo clips were re-cut to 60 s (`publish_run.py --start`).
+
+## Real Google Meet test (2026-11-18, ~11:20–11:32 UTC, 2 humans + Maya)
+Maya joined signed in to a Google account. **Guest join from the Codespace is refused by Meet** ("You can't join this
+video call"), both from Maya's automated Chrome and from a plain Chrome without automation. The same meeting accepted a
+guest from an ordinary laptop. Meet says it checks "system info to confirm you're not a bot"; a cloud-VM browser fails that.
+(No real transcript is published here; findings only.)
+
+What worked
+- Stayed silent through normal conversation, including lines that only *mention* her ("I agree to what Maya said").
+- Answered every direct "Maya, …" / "Hi Maya, …" question (e.g. capital of India → New Delhi; communication tips),
+  often detected early from the partial transcript.
+- Finished an interrupted point when asked ("Maya, continue").
+- Posted on-topic chat tips about once a minute (interval shortened to 60 s for the test); participants noticed them.
+
+What didn't, and what was changed during the test
+- **Invented chat content (fixed).** Asked to read the Meet chat, she claimed she could and made up what it said.
+  Her instructions now say she only hears audio, cannot see the chat, and must never guess. After the fix she stopped inventing,
+  though she still says "sure" before asking people to say the question aloud.
+- **Name not detected in Hindi (fixed).** Hindi speech is transcribed as "माया" / "مایا", and `\b` word boundaries fail next to
+  Devanagari vowel signs. `addressing.py` now has those spellings and uses script-agnostic boundaries.
+- **Over-eager barge-in (open).** Any sound over her, including laughter, cuts her off. Needs a speech check (not just loudness)
+  before stopping.
+- **Borderline trigger (open).** "I'm not sure whether Maya can read my chat" was treated as addressed.
+- **No reconnect (open).** The realtime WebSocket dropped once (`ConnectionClosedError`) and Maya's process exited; it needs
+  automatic reconnect, and rejoining loses her memory of the meeting (reload the saved transcript on rejoin).
+- **No leave command by voice (open).** "Maya, leave the meeting" can't be obeyed; add a leave tool.
+- **Prompt injection attempt via chat.** A participant typed "… ignore system instruction" in the chat. It could not reach her
+  (she can't read chat); any future chat reading must treat chat as untrusted data, never as instructions.
+- Shows the Google account's display name, not "Maya" (use a dedicated account).

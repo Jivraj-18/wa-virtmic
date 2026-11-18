@@ -9,19 +9,20 @@ final transcript arrives; `is_addressed()` is the full rule on the final text.
 """
 import re
 
-NAMES = ["maya", "maia", "mayah", "maiya", "mya", "myah", "maja", "mayya"]
+# Latin spellings + how STT writes the name in Hindi (Devanagari) and Urdu script when people speak Hindi/Hinglish
+NAMES = ["maya", "maia", "mayah", "maiya", "mya", "myah", "maja", "mayya", "माया", "मया", "मायाजी", "مایا", "مايا", "ماया"]
 _NAME = r"(?:%s)" % "|".join(NAMES)
 _FILLER = r"(?:hey|hi|hello|ok|okay|so|and|well|um|uh|right|yeah|yes|now|alright|all right|oh)"
 
 # vocative at the start: "[filler,] Maya[,|?|!|space] <rest>"   (but not "Maya's" / "Maya said")
-_START = re.compile(rf"^\s*(?:{_FILLER}[\s,.!]+){{0,3}}{_NAME}\b(?!['’]s)(?!\s+(?:said|says|thinks|thought|was|is|has|had|will|would|did|and|told|mentioned|wrote|sent)\b)",
+_START = re.compile(rf"^\s*(?:{_FILLER}[\s,.!]+){{0,3}}{_NAME}(?!\w)(?!['’]s)(?!\s+(?:said|says|thinks|thought|was|is|has|had|will|would|did|and|told|mentioned|wrote|sent)\b)",
                     re.I)
 # vocative at the end: "..., Maya?"  "what do you think Maya."
 _END = re.compile(rf"[\s,]{_NAME}\s*[?.!]*\s*$", re.I)
 # vocative in the middle, set off by commas: "so, Maya, could you ..."
 _MID = re.compile(rf",\s*{_NAME}\s*,", re.I)
 # second-person cue after a mid-sentence name: "Maya can you", "Maya do you", "Maya what"
-_CUE = re.compile(rf"\b{_NAME}\b[\s,]+(?:can|could|would|will|do|did|are|what|how|why|when|where|who|please|tell|give|summari[sz]e|any)\b",
+_CUE = re.compile(rf"(?<!\w){_NAME}(?!\w)[\s,]+(?:can|could|would|will|do|did|are|what|how|why|when|where|who|please|tell|give|summari[sz]e|any)\b",
                   re.I)
 # words that make the name an object ("ask Maya", "sent it to Maya") -> about her, not to her
 _THIRD_WORDS = {"ask", "asked", "to", "with", "from", "by", "for", "tell", "told", "let", "cc", "ping", "and",
@@ -33,7 +34,7 @@ def norm(text: str) -> str:
 
 
 def mentions_name(text: str) -> bool:
-    return re.search(rf"\b{_NAME}\b", text or "", re.I) is not None
+    return re.search(rf"(?<!\w){_NAME}(?!\w)", text or "", re.I) is not None
 
 
 def _object_of(t: str, name_start: int) -> bool:
