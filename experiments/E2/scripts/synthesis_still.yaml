@@ -1,0 +1,16 @@
+name: synthesis_still
+# same as synthesis.yaml; run with E2_STILL_EVERY=4 to exercise the repeated "still checking" lines
+voice: en-IN-PrabhatNeural
+# needs three files (meeting notes: fleet raised 24 -> 30 drones; pricing: Fleet $2,340/drone/yr; warranty PDF:
+# extended warranty $410/drone) -> 30 x (2,340 + 410) = $82,500. Expected tool: ask_agent.
+lines:
+  - text: "Hello, yes, I can hear you."
+  - text: "I'm from the finance team. Can you work out the total first-year cost for all the drones in the Kochi pilot, on the Fleet plan, including the extended warranty? Please check all the documents."
+    expect: ["82500"]
+    reply_timeout: 40
+    until_quiet: 20
+  - text: "Great. And when does the pilot start?"
+    expect: ["2 december"]
+    reply_timeout: 30
+    until_quiet: 6
+  - text: "Thanks, that's all. Bye!"

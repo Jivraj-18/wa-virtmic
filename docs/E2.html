@@ -5,12 +5,116 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>E2 · Hold on, let me check</title>
 <link rel="stylesheet" href="style.css">
+<script src="app.js"></script>
+<script src="E2.js"></script>
+<script src="media/E2/deep_facts.js"></script>
+<script src="media/E2/synthesis.js"></script>
+<script src="media/E2/synthesis_still.js"></script>
+<script src="media/E2/synthesis_fallback.js"></script>
+<script src="media/E2/deep_facts_nopreface.js"></script>
 </head>
 <body>
 <div class="wrap">
   <nav class="top"><a href="index.html">← All experiments</a><span class="sep">|</span><span>E2</span></nav>
-  <div class="row"><h1>E2 · "Hold on, let me check": tool calls mid-call</h1><span class="badge PENDING">PENDING</span></div>
-  <p class="lede">This experiment hasn't started yet. See <code>EXPERIMENTS.md</code> in the repo for the plan.</p>
+  <div class="row"><h1>E2 · "Hold on, let me check": tool calls mid-call</h1><span class="badge DONE">DONE</span></div>
+
+  <h2><span class="n">1</span>The idea</h2>
+  <p>A caller asks something that only appears deep inside the project documents. The voice agent says
+    <strong>"Give me a moment, I'm checking the documents"</strong>, looks it up while the line stays live, and then gives
+    the answer. Fast lookups use a keyword search over the files. Questions that combine several documents go to a slower
+    background agent (<code>claude -p</code>), which reads the files and works the answer out.</p>
+
+  <h2><span class="n">2</span>How it works</h2>
+  <div class="panel diagram">
+    <svg viewBox="0 0 860 230" role="img" aria-label="The realtime voice model calls tools in tools.py: search_knowledge and read_file over the context folder, or ask_agent which runs claude -p; while a slow tool runs, holding lines are spoken; the result goes back to the model, which speaks the answer">
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" opacity=".6"/></marker></defs>
+      <rect class="box" x="10" y="80" width="120" height="70" rx="10"/>
+      <text class="lbl" x="70" y="110" text-anchor="middle">Caller</text><text class="sub" x="70" y="128" text-anchor="middle">asks a question</text>
+      <rect class="hl" x="180" y="70" width="170" height="90" rx="10"/>
+      <text class="lbl" x="265" y="100" text-anchor="middle">Voice model</text><text class="sub" x="265" y="118" text-anchor="middle">gpt-realtime</text><text class="sub" x="265" y="134" text-anchor="middle">function calling</text>
+      <rect class="hl" x="410" y="70" width="170" height="90" rx="10"/>
+      <text class="lbl" x="495" y="100" text-anchor="middle">tools.py</text><text class="sub" x="495" y="118" text-anchor="middle">runs the tool, logs JSONL</text><text class="sub" x="495" y="134" text-anchor="middle">holding lines if slow</text>
+      <rect class="box" x="640" y="14" width="210" height="56" rx="8"/>
+      <text class="lbl" x="745" y="38" text-anchor="middle">search_knowledge · read_file</text><text class="sub" x="745" y="56" text-anchor="middle">ripgrep + ranking, ~20 ms</text>
+      <rect class="box" x="640" y="160" width="210" height="56" rx="8"/>
+      <text class="lbl" x="745" y="184" text-anchor="middle">ask_agent</text><text class="sub" x="745" y="202" text-anchor="middle">claude -p, read-only, 6–11 s</text>
+      <rect class="box" x="640" y="88" width="210" height="54" rx="8"/>
+      <text class="lbl" x="745" y="111" text-anchor="middle">context folder</text><text class="sub" x="745" y="128" text-anchor="middle">knowledge/ .md .txt .pdf</text>
+      <path class="ln c" d="M130,105 L178,105" marker-end="url(#ar)"/>
+      <path class="ln" d="M350,100 L408,100" marker-end="url(#ar)"/><text class="sub" x="356" y="92">tool call</text>
+      <path class="ln" d="M408,135 L352,135" marker-end="url(#ar)"/><text class="sub" x="360" y="152">result</text>
+      <path class="ln" d="M580,95 C610,95 610,42 638,42" marker-end="url(#ar)"/>
+      <path class="ln" d="M580,135 C610,135 610,188 638,188" marker-end="url(#ar)"/>
+      <path class="ln" d="M745,70 L745,86" marker-end="url(#ar)"/>
+      <path class="ln" d="M745,160 L745,144" marker-end="url(#ar)"/>
+      <path class="ln a" d="M180,140 C150,170 110,170 80,152" marker-end="url(#ar)"/>
+      <text class="sub" x="40" y="200">"Give me a moment…" then the answer</text>
+    </svg>
+  </div>
+  <p class="note">The holding lines are sent as <em>out-of-band</em> responses that can't see the conversation. Before
+    that change, one "still checking" line made up a wrong total while the tool was still running. A new response is
+    only requested when none is active, which the realtime API requires. If <code>claude -p</code> fails (for example,
+    a usage limit), <code>ask_agent</code> falls back to a single LLM call over all documents, then to search snippets.</p>
+
+  <h2><span class="n">3</span>Demo</h2>
+  <div id="demo"></div>
+  <script>renderDemo(document.getElementById("demo"), ["E2/synthesis", "E2/deep_facts", "E2/synthesis_still", "E2/synthesis_fallback", "E2/deep_facts_nopreface"]);</script>
+
+  <h2><span class="n">4</span>Results</h2>
+  <p>Each row is one caller question that needed a tool. <strong>To first audio</strong>: from the end of the caller's
+    voice to the agent's first sound, which is the holding line. <strong>To answer</strong>: to the first sound of the
+    actual answer. Both are measured on the recorded audio. "Model's own" means the voice model said a short
+    "let me check" itself before calling the tool. "Forced filler" is our scripted line for slow tools.</p>
+  <div id="e2tbl"></div>
+  <div id="e2chart" style="margin-top:14px"></div>
+  <script>renderE2(document.getElementById("e2tbl"), document.getElementById("e2chart"),
+    ["E2/deep_facts", "E2/deep_facts_nopreface", "E2/synthesis", "E2/synthesis_still", "E2/synthesis_fallback"]);</script>
+  <p class="note">The <em>synthesis still</em> run uses a "still checking" interval of 4 s (the default is 15 s) to
+    test the repeat path. In <em>synthesis fallback</em>, <code>claude</code> is disabled on purpose, so the gateway
+    LLM tier answers.</p>
+
+  <h2><span class="n">5</span>What worked, what didn't, what's next</h2>
+  <div class="grid3">
+    <div><h3>Worked</h3><ul class="ok">
+      <li>14 of 14 tool questions in the published runs were answered correctly, including facts on "page 5" of a long
+        spec, inside a price table, on page 2 of a PDF, and a 3-file calculation (30 × ($2,340 + $410) = $82,500).</li>
+      <li>The caller always heard something within 1.2–2.2 s: either the model's own "let me check" or the forced filler.</li>
+      <li>Fast lookups (search, ~20 ms) were answered 3.1–4.4 s after the caller stopped.
+        The <code>claude -p</code> research agent took 6.6–7.9 s, and its answer arrived at 8.7–11.4 s.</li>
+      <li>When the research agent failed, the call kept going: the gateway LLM tier answered in 2.5 s, and with
+        snippets only the agent offered a call back instead of guessing.</li>
+    </ul></div>
+    <div><h3>Didn't</h3><ul class="bad">
+      <li>A "still checking" line inside the conversation once made up an answer ("$320,000") just before the real
+        one. It was fixed with out-of-band holding lines.</li>
+      <li>The model's own preface costs time: answers came 2.9 s after the caller stopped without it and 4.0 s with it.
+        Without it, though, the caller hears about 3 s of silence.</li>
+      <li>The shared Claude account hit its usage limit mid-experiment, so <code>claude -p</code> exited 1 within 3 s.</li>
+      <li>With snippets only, the voice model did not do the arithmetic itself.</li>
+    </ul></div>
+    <div><h3>Next</h3><ul class="next">
+      <li>Wire into E1's call center: <code>tools.agent_kwargs()</code> combined with <code>end_call</code>.</li>
+      <li>For small folders, try a single LLM call over all documents as the main research step: 2.5 s vs about 7 s.</li>
+      <li>Test with real callers: does a 9 s wait with one holding line feel OK on a phone?</li>
+    </ul></div>
+  </div>
+
+  <h2><span class="n">6</span>How to run it</h2>
+<pre><code>sudo apt-get install -y ripgrep poppler-utils     # rg + pdftotext
+# try the tools directly
+python3 scripts/tools.py search "firmware freeze" --context experiments/E2/context
+python3 scripts/tools.py ask "Total first-year cost of the pilot fleet incl. extended warranty?" --context experiments/E2/context
+
+# simulated call (E0 harness) with the tool-enabled agent
+python3 scripts/sim_call.py experiments/E2/scripts/synthesis.yaml --tag E2 \
+  --agent "{python} scripts/tools.py agent --context experiments/E2/context --seconds {seconds} \
+           --in-device {in_device} --out-device {out_device} --transcript {transcript}"
+python3 experiments/E2/tools/analyze_run.py experiments/runs/E2_synthesis_&lt;ts&gt;   # time to filler / answer, correctness
+python3 scripts/publish_run.py experiments/runs/E2_synthesis_&lt;ts&gt; --id E2</code></pre>
+  <p class="note">Options: <code>--no-preface</code> (the model stays silent before tool calls), environment variables
+    <code>E2_ASK_MODEL</code> (default sonnet), <code>E2_ASK_TIMEOUT</code> (90 s), <code>E2_STILL_EVERY</code> (15 s),
+    <code>E2_FILLER_AFTER</code> (1.5 s) and <code>E2_LLM_FALLBACK_MODEL</code> (gpt-4.1-mini, empty to disable).
+    Each run folder gets <code>tool_calls.jsonl</code>, <code>e2_events.jsonl</code> and <code>tool_timing.csv</code>.</p>
 </div>
 </body>
 </html>

@@ -169,9 +169,14 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         hang = "\nIf the caller asks you to end or cut the call, say a one-line goodbye and then call the end_call tool."
         if ctx:
             from context import make_agent, build_instructions
-            agent = make_agent(ctx, caller, extra={"tools": [END_CALL_TOOL], "on_tool": on_tool,
-                                                  "instructions": build_instructions(ctx, caller) + hang},
-                               transcript=d / "transcript_live.txt", log=log)
+            import tools  # E2: search_knowledge / read_file / ask_agent over the context folder, with holding lines
+            e2 = tools.agent_kwargs(ctx["path"], d, log=log)
+            agent = make_agent(ctx, caller, extra={
+                "tools": [END_CALL_TOOL] + e2["tools"],
+                "on_tool": tools.chain_on_tool(e2["on_tool"], on_tool),  # E2 returns None for end_call
+                "on_event": e2["on_event"],  # needed for the holding-line logic
+                "instructions": build_instructions(ctx, caller) + hang + e2["instructions_suffix"]},
+                transcript=d / "transcript_live.txt", log=log)
         else:
             agent = Agent(transcript=d / "transcript_live.txt", log=log, tools=[END_CALL_TOOL], on_tool=on_tool,
                           instructions=INSTRUCTIONS + hang)

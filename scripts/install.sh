@@ -7,7 +7,7 @@ set -euo pipefail
 
 # --- apt: Google Chrome (.deb) + PulseAudio + ffmpeg ------------------------------------------
 missing=()
-for p in pulseaudio pulseaudio-utils ffmpeg; do
+for p in pulseaudio pulseaudio-utils ffmpeg ripgrep poppler-utils; do
   dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p")
 done
 debs=()
