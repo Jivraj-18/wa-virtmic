@@ -1,0 +1,13 @@
+name: podcast
+voice: en-IN-PrabhatNeural
+# Mode B. Ask for a 1-minute podcast, ask a question in the middle of it, resume, then stop.
+lines:
+  - text: "Hi. Can you make me a one minute podcast about Project Nimbus?"
+  - text: "Wait, sorry. How much budget is the team asking for?"
+    interrupt: true
+    after: 24.0
+  - text: "Got it. Please continue."
+  - text: "Thanks, that's enough for today. Please stop."
+    interrupt: true
+    after: 12.0
+  - text: "Bye!"
