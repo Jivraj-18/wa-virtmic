@@ -335,6 +335,13 @@ def _cmd_join(a):
         run_dir = Path(a.out or root / time.strftime("%Y%m%d_%H%M%S"))
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "meta.json").write_text(json.dumps({"url": a.url, "started": time.time()}))
+        live = Path.home() / "maya_live_transcript.txt"  # stable path to the current meeting's who-said-what log
+        (run_dir / "who_said_what.txt").touch()
+        try:
+            live.unlink(missing_ok=True)
+            live.symlink_to(run_dir / "who_said_what.txt")
+        except Exception:
+            pass
         print(f"maya: {len(history)} lines of earlier context from previous sessions of this meeting")
         await page.wait_for_timeout(2500)
         await R.enable_captions(page)
@@ -362,6 +369,10 @@ def _cmd_join(a):
                     if not warned["cap"] and n > 10:
                         print("maya: captions region not found (yet)"); warned["cap"] = True
                 elif m:
+                    if blocks:
+                        own = [b for b in blocks if b["speaker"].strip().lower() not in ("you", "maya")]
+                        if own:
+                            m.live_caption = (time.time(), own[-1]["speaker"], own[-1]["text"])
                     for sp, tx in cap.update(blocks):
                         await m.on_caption(sp, tx)
                 msgs = await R.read_chat(page)

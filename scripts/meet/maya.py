@@ -34,7 +34,7 @@ INSTRUCTIONS = """You are Maya, an AI participant in a video meeting with severa
 You only speak when the system asks you to, which happens when someone addresses you by name.
 Then answer that person directly, using what was said in the meeting so far. Keep it to one to three short spoken
 sentences, natural and to the point. Do not greet, do not recap the meeting unless asked, do not say you are an AI
-unless asked. Always speak English unless the person addressing you spoke another language.
+unless asked. Reply in the language of the question you are answering (English question -> English answer), regardless of earlier turns.
 What you know about the meeting (be honest about it):
 - You HEAR the meeting audio (the whole conversation since you joined).
 - You also receive Google Meet's live captions as text lines "[Captions] <speaker name>: <words>". Use them to know
@@ -59,6 +59,33 @@ CHAT_RESPOND = ("A participant addressed you in the MEETING CHAT. Answer them ou
 RESPOND = ("Someone in the meeting just addressed you by name. Answer them now, briefly (1-3 short sentences). "
            "Their words, from speech-to-text (may be cut off or slightly wrong): \"{text}\"")
 
+FOLLOWUP_S = 30.0      # seconds after Maya's answer during which follow-ups don't need her name
+
+FOLLOWUP_PROMPT = """You decide if a meeting utterance is directed at the AI assistant Maya as a FOLLOW-UP.
+Maya was just asked: {q}
+Maya answered: {a}
+New utterance{who}: {u}
+Answer "yes" if it continues the conversation with Maya (a follow-up question, a request to her, "and what about...",
+"why?", "tell me more", a correction of her answer). Answer "no" if the humans are talking among themselves, reacting
+("okay", "nice", laughter), or talking ABOUT Maya. Reply with exactly one word: yes or no."""
+
+
+def _is_followup(q, a, u, speaker=None) -> bool:
+    import urllib.request, uuid
+    import gateway
+    body = {"model": os.environ.get("MAYA_FOLLOWUP_MODEL", "gpt-4.1-mini"), "max_tokens": 2, "temperature": 0,
+            "messages": [{"role": "user", "content": FOLLOWUP_PROMPT.format(
+                q=q[:300], a=a[:400], u=u[:300], who=f" (by {speaker})" if speaker else "")},
+                         {"role": "system", "content": f"nonce {uuid.uuid4().hex[:8]}"}]}
+    try:
+        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={**gateway.auth_header(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return json.load(r)["choices"][0]["message"]["content"].strip().lower().startswith("y")
+    except Exception:
+        return False
+
+
 BARGE_RMS = 400.0      # int16 RMS at 16 kHz that counts as someone talking
 BARGE_MS = 400         # ...for this long while Maya is speaking -> stop her (120 ms let laughter cut her off)
 
@@ -71,6 +98,11 @@ class Maya:
         self.history = list(history or [])   # "who said what" lines; survives reconnects (passed to the next Maya)
         self.leave_requested = False
         self.recent_speakers = []  # (wall time, caption speaker name)
+        self.last_trigger = 0.0
+        self.followup_until = 0.0      # after Maya answers, follow-ups without her name count for a while
+        self.last_exchange = ("", "")   # (question, Maya's answer) for the follow-up classifier
+        self.classifying = False
+        self.live_caption = (0.0, "", "")   # (wall time, speaker, text) of the newest on-screen caption block
         self.last_caption = 0.0
         self.who_path = Path(transcript).with_name("who_said_what.txt") if transcript else None
         self.events_path = Path(events) if events else None
@@ -148,12 +180,47 @@ class Maya:
     def speaker_hint(self) -> str:
         """Who is probably talking to Maya right now, from the most recent caption speakers (Meet labels them)."""
         recent = [(t, sp) for t, sp in self.recent_speakers if time.time() - t < 20]
-        if not recent:
+        live_sp, _ = self.caption_now()
+        if not recent and not live_sp:
             return ""
-        last = recent[-1][1]
-        everyone = sorted({sp for _, sp in self.recent_speakers})
+        last = live_sp or recent[-1][1]
+        everyone = sorted({sp for _, sp in self.recent_speakers} | ({live_sp} if live_sp else set()))
         return (f" Meet captions say the person speaking to you is most likely {last}. People heard in this meeting: "
                 f"{', '.join(everyone)}. Address the person by name when it helps.")
+
+    def caption_now(self):
+        t, sp, tx = self.live_caption
+        return (sp, tx) if time.time() - t < 6 else (None, None)
+
+    async def after_utterance(self, iid, text):
+        """Someone finished an utterance (server VAD). Wait ~1 s so Meet's caption (with the speaker's NAME and a
+        cleaner text) catches up, then decide: addressed by name -> answer; else maybe a follow-up."""
+        await asyncio.sleep(1.2)
+        sp, ctext = self.caption_now()
+        best = ctext if ctext and len(ctext) >= len(text) * 0.5 else text
+        if iid in self.triggered:
+            return
+        if is_addressed(text) or (ctext and is_addressed(ctext)):
+            await self.trigger(iid, (f"{sp}: " if sp else "") + best, early=False)
+        else:
+            await self.maybe_followup(best, sp, source="utterance")
+
+    async def maybe_followup(self, text, speaker=None, source="audio"):
+        """Inside the follow-up window, ask a small LLM whether this utterance continues the talk with Maya."""
+        if time.time() > self.followup_until or self.classifying or self.speaking() or is_addressed(text):
+            return
+        if len(text.split()) < 2:
+            return
+        self.classifying = True
+        try:
+            q, a = self.last_exchange
+            yes = await asyncio.to_thread(_is_followup, q, a, text, speaker)
+        finally:
+            self.classifying = False
+        self.live_caption = (0.0, "", "")   # (wall time, speaker, text) of the newest on-screen caption block
+        self.event("followup_check", text=text, speaker=speaker, yes=yes, source=source)
+        if yes and time.time() <= self.followup_until + 5:
+            await self.trigger(f"fu-{time.time():.0f}", (f"{speaker}: " if speaker else "") + text, early=False)
 
     async def on_caption(self, speaker, text):
         if speaker.strip().lower() in ("you", "maya"):
@@ -164,6 +231,11 @@ class Maya:
         self._remember(line)
         self.suggester.add(speaker, text)
         await self.inject(line)
+        # Meet's captions spell "Maya" reliably even when audio STT writes it in another script (seen: "මයා")
+        if is_addressed(text) and not self.speaking():
+            self.event("addressed_via_captions", speaker=speaker, text=text)
+            await self.trigger(f"cap-{time.time():.0f}", f"{speaker}: {text}", early=False)
+
 
     async def on_chat(self, sender, text):
         if sender.strip().lower() in ("you", "maya"):
@@ -173,7 +245,7 @@ class Maya:
         self.suggester.add(f"{sender} (chat)", text)
         self.event("chat_in", sender=sender, text=text)
         await self.inject(line)
-        if is_addressed(text) or "maya" in text.lower():
+        if is_addressed(text):
             self.stats["triggers"] += 1
             self.event("addressed_in_chat", sender=sender, text=text)
             await self.agent.respond(CHAT_RESPOND.format(sender=sender, text=text.replace('"', "'")))
@@ -192,10 +264,14 @@ class Maya:
 
     # ---------------------------------------------------------------- realtime events
     async def trigger(self, item_id, text, early):
+        if time.time() - self.last_trigger < 6:   # audio STT and captions can both catch the same question
+            return
+        self.last_trigger = time.time()
         self.triggered.add(item_id)
         self.stats["triggers"] += 1
         self.stats["early_triggers"] += early
         self.event("addressed", item=item_id, early=early, text=text)
+        self.last_exchange = (text, "")
         await self.agent.respond(RESPOND.format(text=text.replace('"', "'")) + self.speaker_hint())
 
     async def on_event(self, m, agent):
@@ -203,8 +279,7 @@ class Maya:
         if ty == "conversation.item.input_audio_transcription.delta":
             iid = m.get("item_id")
             self.partial[iid] = self.partial.get(iid, "") + m.get("delta", "")
-            if iid not in self.triggered and early_address(self.partial[iid]):
-                await self.trigger(iid, self.partial[iid], early=True)
+            # no early trigger: in the real Meet it fired on "Hello Maya, my..." and answered before the question ended
         elif ty == "conversation.item.input_audio_transcription.completed":
             iid, text = m.get("item_id"), (m.get("transcript") or "").strip()
             self.partial.pop(iid, None)
@@ -214,8 +289,7 @@ class Maya:
             if time.time() - self.last_caption > 30:  # captions not working -> fall back to unnamed audio text
                 self.suggester.add("Participant", text)
                 self._remember(f"[Heard] {text}")
-            if iid not in self.triggered and is_addressed(text):
-                await self.trigger(iid, text, early=False)
+            asyncio.create_task(self.after_utterance(iid, text))
         elif ty == "response.created":
             self.response_id = m.get("response", {}).get("id")
             self.response_active = True
@@ -233,6 +307,9 @@ class Maya:
             self.suggester.add("Maya", m.get("transcript", ""))
             if m.get("transcript"):
                 self._remember(f"[Maya said] {m['transcript']}")
+                self.last_exchange = (self.last_exchange[0], m["transcript"])
+                # keep the conversation open: follow-ups for FOLLOWUP_S after her audio ends
+                self.followup_until = max(time.time(), self.play_until) + FOLLOWUP_S
         elif ty == "input_audio_buffer.speech_started" and self.speaking():
             await self.barge_in("server_vad")
 

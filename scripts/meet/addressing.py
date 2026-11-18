@@ -10,7 +10,7 @@ final transcript arrives; `is_addressed()` is the full rule on the final text.
 import re
 
 # Latin spellings + how STT writes the name in Hindi (Devanagari) and Urdu script when people speak Hindi/Hinglish
-NAMES = ["maya", "maia", "mayah", "maiya", "mya", "myah", "maja", "mayya", "माया", "मया", "मायाजी", "مایا", "مايا", "ماया"]
+NAMES = ["maya", "sumaya", "somaya", "maia", "mayah", "maiya", "mya", "myah", "maja", "mayya", "माया", "मया", "मायाजी", "مایا", "مايا", "ماया"]
 _NAME = r"(?:%s)" % "|".join(NAMES)
 _FILLER = r"(?:hey|hi|hello|ok|okay|so|and|well|um|uh|right|yeah|yes|now|alright|all right|oh)"
 
