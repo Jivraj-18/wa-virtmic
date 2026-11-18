@@ -1,0 +1,5 @@
+# shared context-folder format (E1/E2). Only the keys E2 uses are listed here.
+greeting: "In English, greet the caller in one short sentence as the assistant for the Kestrel K2 programme team and ask how you can help."
+language: en
+voice: marin
+max_call_seconds: 300
