@@ -295,9 +295,29 @@ def _cmd_login(a):
           "Log in with Maya's SEPARATE Google account there. The login is kept in that profile.")
 
 
+def load_previous_history(url, root, max_dirs=6):
+    """Context from earlier sessions of the SAME meeting (meta.json url match), oldest first."""
+    lines = []
+    dirs = sorted([d for d in Path(root).glob("*") if (d / "meta.json").exists()])[-max_dirs:]
+    for d in dirs:
+        try:
+            if json.loads((d / "meta.json").read_text()).get("url") != url:
+                continue
+        except Exception:
+            continue
+        for fname in ("who_said_what.txt", "transcript.txt"):
+            f = d / fname
+            if f.exists():
+                lines += [l.split(" ", 1)[1] if fname == "who_said_what.txt" and " " in l else l
+                          for l in f.read_text().splitlines() if l.strip()]
+                break
+    return lines[-300:]
+
+
 def _cmd_join(a):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from meet.maya import Maya
+    from meet import meet_reader as R
 
     async def go():
         devices_up()
@@ -310,29 +330,74 @@ def _cmd_join(a):
         page = await meet_page(ctx)
         await join_meet(page, a.url, name=a.name)
         loop = asyncio.get_running_loop()
-        run_dir = Path(a.out or Path.home() / "maya_meetings" / time.strftime("%Y%m%d_%H%M%S"))
+        root = Path.home() / "maya_meetings"
+        history = load_previous_history(a.url, root) if not a.fresh else []
+        run_dir = Path(a.out or root / time.strftime("%Y%m%d_%H%M%S"))
         run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "meta.json").write_text(json.dumps({"url": a.url, "started": time.time()}))
+        print(f"maya: {len(history)} lines of earlier context from previous sessions of this meeting")
+        await page.wait_for_timeout(2500)
+        await R.enable_captions(page)
+        await R.open_chat(page)
+        state = {"maya": None}
+        cap, chat = R.CaptionTracker(), R.ChatTracker()
 
         def post(text):  # called from the suggester thread
-            maya.stats["suggestions"] += 1
-            maya.event("chat_suggestion", text=text)
+            m = state["maya"]
+            m.stats["suggestions"] += 1
+            m.event("chat_suggestion", text=text)
             asyncio.run_coroutine_threadsafe(send_chat(page, text), loop)
 
-        maya = Maya(f"{OUT_SINK}.monitor", MIC_SINK, run_dir / "transcript.txt", run_dir / "maya_events.jsonl",
-                    chat_post=post, suggest_interval=a.suggest_interval)
+        async def reader():
+            """Poll Meet's captions (who said what) and chat; feed new lines to the current Maya session."""
+            warned = {"cap": False, "chat": False}
+            n = 0
+            while True:
+                n += 1
+                m = state["maya"]
+                blocks = await R.read_captions(page)
+                if blocks is None:
+                    if n % 20 == 1:
+                        await R.enable_captions(page, log=lambda *_: None)
+                    if not warned["cap"] and n > 10:
+                        print("maya: captions region not found (yet)"); warned["cap"] = True
+                elif m:
+                    for sp, tx in cap.update(blocks):
+                        await m.on_caption(sp, tx)
+                msgs = await R.read_chat(page)
+                if msgs is None:
+                    if n % 10 == 1:
+                        await R.open_chat(page)
+                elif m:
+                    for msg in chat.update(msgs, include_existing=True):
+                        await m.on_chat(msg["sender"], msg["text"])
+                await asyncio.sleep(1.5)
 
         async def watch():
             while True:
                 route_streams(a.port)
                 if not await in_meeting(page):
-                    maya.event("meeting_ended")
-                    maya.agent.stop.set()
+                    state["maya"].event("meeting_ended")
+                    state["ended"] = True
+                    state["maya"].agent.stop.set()
                     return
                 await asyncio.sleep(10)
 
+        reader_task = asyncio.create_task(reader())
+        t_end = time.time() + a.seconds
         try:
-            await maya.run(a.seconds, extra=[watch()])
+            while time.time() < t_end:
+                maya = Maya(f"{OUT_SINK}.monitor", MIC_SINK, run_dir / "transcript.txt", run_dir / "maya_events.jsonl",
+                            chat_post=post, suggest_interval=a.suggest_interval, history=history)
+                state["maya"] = maya
+                await maya.run(t_end - time.time(), extra=[watch()])
+                history = maya.history
+                if maya.leave_requested or state.get("ended") or time.time() >= t_end:
+                    break
+                print("maya: realtime session ended unexpectedly - reconnecting with the meeting context")
+                await asyncio.sleep(2)
         finally:
+            reader_task.cancel()
             await leave_meet(page)
             await pw.stop()
 
@@ -370,4 +435,5 @@ def add_commands(sub):
             p.add_argument("--seconds", type=float, default=3600)
             p.add_argument("--suggest-interval", type=float, default=180)
             p.add_argument("--out", help="folder for transcript + events (default ~/maya_meetings/<ts>, outside the repo)")
+            p.add_argument("--fresh", action="store_true", help="don't load context from earlier sessions of this meeting")
         p.set_defaults(fn=fn)
