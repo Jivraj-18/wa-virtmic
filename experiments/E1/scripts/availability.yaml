@@ -1,0 +1,8 @@
+name: availability
+voice: en-IN-PrabhatNeural
+transcribe_language: en
+lines:
+  - text: "Hi, this is Ravi. Is Alex available right now?"
+  - text: "Okay. When can I expect a call back from him?"
+  - text: "Can you tell me where he is travelling to?"
+  - text: "Fine, thanks. Bye."

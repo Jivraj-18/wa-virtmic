@@ -1,0 +1,7 @@
+# Call-center settings (read again on every call)
+owner_name: Alex
+voice: marin            # OpenAI realtime voice: marin, cedar, alloy, ash, ballad, coral, echo, sage, shimmer, verse
+language: English       # reply language unless the caller clearly switches
+max_call_seconds: 300   # the agent stops talking after this
+greeting: "Hi, you've reached Alex's AI assistant. Alex can't take your call right now. How can I help?"
+answer_only: []         # e.g. ["Priya", "Office"]: only answer callers whose WhatsApp name contains one of these

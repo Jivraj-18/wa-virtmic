@@ -1,0 +1,8 @@
+name: g5_release
+voice: en-US-GuyNeural
+transcribe_language: en
+lines:
+  - text: "Hello, I'm calling about the G5 project. When is G5 releasing?"
+  - text: "And is there a beta I can try before that?"
+  - text: "What is the price of G5 for fifty users?"
+  - text: "Got it. Thank you."

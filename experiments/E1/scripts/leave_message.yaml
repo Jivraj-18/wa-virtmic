@@ -1,0 +1,9 @@
+name: leave_message
+voice: en-IN-NeerjaNeural
+transcribe_language: en
+lines:
+  - text: "Hi, is Alex there?"
+  - text: "Can I leave a message for him?"
+  - text: "This is Priya from the sales team. Our pilot customer wants beta access to G5 for two more people. Please ask Alex to call me back tomorrow morning."
+    pause: 0.8
+  - text: "Yes, that's right. Thanks, bye."

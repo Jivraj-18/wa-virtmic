@@ -37,7 +37,7 @@ FIND_ACCEPT_JS = r"""() => {
     if (re.test(label) && el.offsetParent !== null) {
       el.setAttribute('data-autoanswer', '1');
       const box = el.closest('[role="dialog"], [data-animate-modal-popup], section, div[tabindex]') || el.parentElement;
-      return {found: true, label, html: (box || el).outerHTML.slice(0, 20000), text: (box || el).innerText || ''};
+      return {found: true, label, html: (box || el).outerHTML.slice(0, 20000), text: (box || el).innerText.slice(0, 500)};
     }
   }
   const txt = document.body ? document.body.innerText : '';
@@ -124,11 +124,19 @@ def call_active(page) -> bool:
     return ui or bool(client_streams("source-outputs"))
 
 
-def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime"):
+def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", context: str | None = None,
+                caller: str | None = None):
     """Record BOTH sides for the whole call (accept -> hang-up) and talk to the caller, then transcribe.
     mode=realtime: live two-way conversation via OpenAI Realtime (realtime_agent.py); the live
                    transcript goes to transcript_live.txt. Falls back to the greeting if it fails to start.
-    mode=greeting: play the pre-synthesized greeting WAV once (the old behaviour)."""
+    mode=greeting: play the pre-synthesized greeting WAV once (the old behaviour).
+    context      : E1 call-center folder (context.py). Re-read on every call; the agent is built from it and
+                   summary.md is written after the call."""
+    ctx = None
+    if context:
+        from context import load_context
+        ctx = load_context(context)
+        max_secs = int(ctx["config"].get("max_call_seconds") or max_secs)
     ts = time.strftime("%Y%m%d_%H%M%S")
     d = CALLS / ts
     d.mkdir(parents=True, exist_ok=True)
@@ -136,6 +144,8 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime"):
     recs = [start_rec("virtmic", ai_wav), start_rec("callout_sink.monitor", caller_wav)]
     t0 = time.time()
     log(f"recording call -> {d}")
+    if ctx:
+        (d / "call_meta.json").write_text(json.dumps({"caller": caller, "context": ctx["path"]}))
 
     for _ in range(40):  # wait up to 20 s for Chrome to open its mic (= media flowing)
         if client_streams("source-outputs"):
@@ -156,9 +166,15 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime"):
         return {"error": f"unknown tool {name}"}
 
     if mode == "realtime":
-        agent = Agent(transcript=d / "transcript_live.txt", log=log, tools=[END_CALL_TOOL], on_tool=on_tool,
-                      instructions=INSTRUCTIONS + "\nIf the caller asks you to end or cut the call, say a one-line "
-                                   "goodbye and then call the end_call tool.")
+        hang = "\nIf the caller asks you to end or cut the call, say a one-line goodbye and then call the end_call tool."
+        if ctx:
+            from context import make_agent, build_instructions
+            agent = make_agent(ctx, caller, extra={"tools": [END_CALL_TOOL], "on_tool": on_tool,
+                                                  "instructions": build_instructions(ctx, caller) + hang},
+                               transcript=d / "transcript_live.txt", log=log)
+        else:
+            agent = Agent(transcript=d / "transcript_live.txt", log=log, tools=[END_CALL_TOOL], on_tool=on_tool,
+                          instructions=INSTRUCTIONS + hang)
         th = agent.start_thread(max_secs)
         th.join(10)  # the thread only exits early if the realtime session failed
         if not th.is_alive():
@@ -216,6 +232,12 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime"):
                   "".join(f"[{int(a)//60:02d}:{a%60:04.1f}] {who:6s} {t}\n" for a, _, who, t in lines))
     log("transcript ->", tr)
     print(tr.read_text(), flush=True)
+    if ctx:
+        try:
+            from call_summary import summarize
+            log("summary ->", summarize(d, ctx, caller))
+        except Exception as e:
+            log(f"summary failed: {type(e).__name__}: {e}")
 
 
 def main():
@@ -224,6 +246,7 @@ def main():
     ap.add_argument("--max", type=int, default=1800, help="max seconds to record a call")
     ap.add_argument("--once", action="store_true", help="exit after the first answered call")
     ap.add_argument("--mode", choices=["realtime", "greeting"], default="realtime")
+    ap.add_argument("--context", help="E1 call-center folder (see context.py); reloaded on every call")
     a = ap.parse_args()
 
     subprocess.run([str(HERE / "audio_setup.sh")], stdout=subprocess.DEVNULL, check=True)
@@ -254,11 +277,20 @@ def main():
                         log("incoming call from someone not matching ANSWER_ONLY - ignoring (not answered, not recorded)")
                         warned = True
                     continue
+                caller = None
+                if r.get("found") and a.context:
+                    from context import caller_allowed, caller_from_text, load_context
+                    caller = caller_from_text(r.get("text"))
+                    if not caller_allowed(load_context(a.context), caller):
+                        if not warned:
+                            log(f"incoming call from {caller!r} not in answer_only - leaving it ringing")
+                            warned = True
+                        continue
                 if r.get("found"):
-                    log(f"incoming call! clicking '{r['label']}'")
+                    log(f"incoming call! clicking '{r['label']}'" + (f" (caller {caller!r})" if caller else ""))
                     (HERE / "call_ui_last.html").write_text(r["html"])
                     p.locator('[data-autoanswer="1"]').first.click()
-                    handle_call(p, greeting_wav, a.max, a.mode)
+                    handle_call(p, greeting_wav, a.max, a.mode, a.context, caller)
                     warned = False
                     if a.once:
                         return

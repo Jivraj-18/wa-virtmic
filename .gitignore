@@ -15,3 +15,7 @@ experiments/runs/
 # ...but the docs site's compressed demo clips are committed
 !docs/media/
 !docs/media/**
+
+# E1 call-center: the real context folder and runtime state stay local
+/callcenter/
+scripts/callcenter_state.json

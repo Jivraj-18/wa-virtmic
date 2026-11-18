@@ -1,1 +1,1 @@
-card({id: "E1", status: "PENDING", title: "\"Call center\" mode controlled from a folder", finding: "Not started yet."});
+card({id: "E1", status: "DONE", title: "\"Call center\" mode controlled from a folder", finding: "Plain files (instructions.md, config.yaml, knowledge/) steer the call agent and are re-read on every call. In simulated calls it answered all 12 turns, 6 of 7 checked answers fully matched the notes (median latency about 1.5 s), and each call got an accurate summary.md. Not yet tried on a real call."});
