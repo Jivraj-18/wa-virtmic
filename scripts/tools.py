@@ -20,6 +20,8 @@ Integration (E1 call center):
   import tools
   kw = tools.agent_kwargs(context_dir, call_dir)       # {"tools", "on_tool", "on_event", "instructions_suffix"}
   Agent(..., instructions=base + kw.pop("instructions_suffix"), **kw)
+  # with other tools (e.g. E1's end_call): tools=kw["tools"] + [END_CALL_TOOL],
+  #   on_tool=tools.chain_on_tool(kw["on_tool"], end_call_handler), on_event=tools.chain_on_event(kw["on_event"], other)
 
 CLI
   python3 scripts/tools.py search "firmware freeze" --context experiments/E2/context
@@ -40,8 +42,8 @@ ASK_TIMEOUT = float(os.environ.get("E2_ASK_TIMEOUT", 90))
 ASK_MODEL = os.environ.get("E2_ASK_MODEL", "sonnet")
 CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or str(Path.home() / ".local/bin/claude")
 SLOW_TOOLS = {"ask_agent"}
-FILLER_AFTER = 1.5          # seconds before a fast tool counts as slow
-STILL_EVERY = 15.0          # seconds between "still checking" lines
+FILLER_AFTER = float(os.environ.get("E2_FILLER_AFTER", 1.5))  # seconds before a fast tool counts as slow
+STILL_EVERY = float(os.environ.get("E2_STILL_EVERY", 15))  # seconds between "still checking" lines
 STILL_MAX = 4
 
 STOP = set("""a an and are as at be by can could did do does for from had has have how i if in into is it its
@@ -198,15 +200,27 @@ class ContextTools:
                                                     start_new_session=True)
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.CancelledError:
+            proc.kill()
+            raise
+        except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return {"error": f"research assistant timed out after {timeout:.0f} s", "seconds": round(time.time() - t, 1)}
+            return await self._ask_fallback(question, f"timed out after {timeout:.0f} s", t)
         ans = out.decode(errors="replace").strip()
         if proc.returncode != 0 or not ans:
-            return {"error": f"research assistant failed (exit {proc.returncode}): {err.decode(errors='replace')[-300:]}",
-                    "seconds": round(time.time() - t, 1)}
+            why = (err.decode(errors="replace") or ans)[-300:].strip()
+            return await self._ask_fallback(question, f"failed (exit {proc.returncode}): {why}", t)
         return {"answer": ans, "seconds": round(time.time() - t, 1)}
+
+    async def _ask_fallback(self, question, why, t):
+        """The research assistant is down (timeout, usage limit, ...): hand back the best keyword-search snippets so
+        the voice model can still try to combine them itself."""
+        r = await asyncio.to_thread(self.search_knowledge, question, 6)
+        return {"error": f"research assistant {why}", "seconds": round(time.time() - t, 1),
+                "fallback": "Here are the most relevant document snippets instead. Combine them carefully; later "
+                            "meeting notes override earlier ones. If they are not enough, offer a call back.",
+                "snippets": r.get("results", [])}
 
     # ---- dispatch -------------------------------------------------------------
     async def call(self, name: str, args: dict):
@@ -340,6 +354,9 @@ class E2Session:
 
     # ---- tool handler (Agent on_tool) -----------------------------------------
     async def on_tool(self, name, args, agent):
+        """Returns None for tools this module doesn't own, so a dispatcher can chain handlers (see chain_on_tool)."""
+        if name not in TOOL_NAMES:
+            return None
         self.n += 1
         cid = self.n
         t0 = time.time()
@@ -383,9 +400,41 @@ class E2Session:
         return result
 
 
+TOOL_NAMES = {t["name"] for t in TOOLS}
+
+
+def chain_on_tool(*handlers):
+    """Combine several on_tool handlers: the first one returning non-None wins (e.g. E2 tools + E1's end_call)."""
+    async def on_tool(name, args, agent):
+        for h in handlers:
+            if h is None:
+                continue
+            try:
+                r = await h(name, args, agent)
+            except KeyError:
+                continue
+            if r is not None:
+                return r
+        return {"error": f"unknown tool {name}"}
+    return on_tool
+
+
+def chain_on_event(*handlers):
+    """Combine several on_event handlers (sync or async)."""
+    async def on_event(m, agent):
+        for h in handlers:
+            if h is not None:
+                r = h(m, agent)
+                if asyncio.iscoroutine(r):
+                    await r
+    return on_event
+
+
 def agent_kwargs(context_dir, log_dir=None, log=print, preface=True) -> dict:
     """Plug-in for realtime_agent.Agent: {"tools", "on_tool", "on_event", "instructions_suffix"}.
-    If you already have an on_event, call both (kw["on_event"](m, agent) is sync)."""
+    on_tool returns None for names it doesn't own; combine with other tools via
+    tools=kw["tools"] + other_tools, on_tool=chain_on_tool(kw["on_tool"], other_on_tool),
+    on_event=chain_on_event(kw["on_event"], other_on_event). on_event is required for the filler logic."""
     s = E2Session(context_dir, log_dir, log)
     return {"tools": TOOLS, "on_tool": s.on_tool, "on_event": s.on_event,
             "instructions_suffix": SUFFIX.format(preface=PREFACE_MODEL if preface else PREFACE_NONE)}
