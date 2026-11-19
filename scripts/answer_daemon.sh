@@ -7,6 +7,10 @@
 #   bash scripts/answer_daemon.sh status
 #   tail -f scripts/answer_daemon.log
 #
+# For "never goes down", run it from Termux (outside proot) with scripts/termux/wa-answer.sh instead: proot-distro
+# runs with --kill-on-exit, so anything started from an interactive proot shell (or a Claude session) dies when
+# that shell exits. wa-answer.sh owns its own proot instance and restarts the supervisor if it ever exits.
+#
 # Why a virtual display: Chrome used to draw on Termux:X11, an Android app. When that app is in the background
 # Android pauses it, and every Chrome call into X blocks - CDP stops answering and incoming calls are missed.
 # Xvfb (no root: extracted into ~/.local/opt/xvfb, see XVFB_HOME) is a normal process Android doesn't pause.
@@ -56,7 +60,18 @@ case "${1:-start}" in
 esac
 
 # ------------------------------------------------------------------------------------------------ supervisor
+# Clean slate: a new supervisor takes over from any old one and (re)starts the whole stack as its OWN children,
+# so nothing it depends on lives in another proot instance that may exit later.
+if alive "$PIDFILE" && [ "$(cat "$PIDFILE")" != $$ ]; then
+  log "taking over from supervisor pid $(cat "$PIDFILE")"; kill "$(cat "$PIDFILE")" 2>/dev/null; sleep 2
+fi
 echo $$ >"$PIDFILE"
+alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" 2>/dev/null
+pkill -f '^/usr/lib/chromium/chromium' 2>/dev/null
+pkill -f "^$XVFB_HOME/usr/bin/Xvfb.patched $WA_DISPLAY" 2>/dev/null
+pulseaudio --kill 2>/dev/null
+sleep 3
+pkill -9 -f '^/usr/lib/chromium/chromium' 2>/dev/null; rm -f "$AA_PIDFILE"
 trap 'log "supervisor exiting"; rm -f "$PIDFILE"; exit 0' TERM INT
 log "supervisor started (pid $$, display $WA_DISPLAY, engine ${VOICE_ENGINE:-live})"
 [ -x /data/data/com.termux/files/usr/bin/termux-wake-lock ] && \
@@ -68,7 +83,11 @@ export AA_HEARTBEAT="$HEARTBEAT"
 cdp_fail=0; aa_fails=0; last_wa=""
 
 ensure_audio() {
-  pulseaudio --check 2>/dev/null || { log "pulseaudio not running - starting"; pulseaudio --start --exit-idle-time=-1; }
+  if ! pactl info >/dev/null 2>&1; then
+    log "pulseaudio not running - starting it (and restarting Chrome, whose audio was on the old server)"
+    "$S/audio_setup.sh" >/dev/null 2>&1
+    [ -n "$(chrome_pids)" ] && restart_chrome "pulseaudio restarted"
+  fi
   pactl list short sinks 2>/dev/null | grep -q virtmic_sink || { log "virtual audio devices missing - creating"; "$S/audio_setup.sh" >/dev/null 2>&1; }
 }
 
