@@ -1,1 +1,0 @@
-card({id: "E2", status: "DONE", title: "\"Hold on, let me check\": tool calls mid-call", finding: "The voice agent looks things up mid-call (ripgrep search, or a claude -p research agent) and got 14 of 14 deep-document questions right. The caller hears a holding line within 1.2–2.2 s. Answers arrive after about 3–4 s for a search and 9–11 s for the research agent."});
