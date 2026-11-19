@@ -162,6 +162,19 @@ If `launch_chrome.sh` can't connect to the display, check that the X11 socket is
 (`ls /tmp/.X11-unix/`) - proot-distro normally shares Termux's `/tmp`, but this is the step most likely to
 need a tweak on a given device/Termux version.
 
+If Chrome dies immediately with `Trace/breakpoint trap`, that's Chrome's sandbox hitting a syscall `proot`'s
+ptrace-based emulation can't handle - a known Chrome-in-proot incompatibility. Disable the sandbox instead
+(safe here: proot already removes any real privilege-escalation risk the sandbox would matter for):
+
+```bash
+echo 'export CHROME_EXTRA_ARGS="--no-sandbox"' >> ~/.bashrc
+export CHROME_EXTRA_ARGS="--no-sandbox"
+bash scripts/launch_chrome.sh
+```
+
+`launch_chrome.sh` and `scripts/meet/browser.py` (Maya's Chrome) both read `CHROME_EXTRA_ARGS` and append it
+as-is; empty/unset anywhere else (Codespace included), so this is Termux-only.
+
 ### 9. Run the demo
 
 ```bash

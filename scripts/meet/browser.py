@@ -100,6 +100,8 @@ def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False,
            "--disable-dev-shm-usage", "--window-size=1280,860", "--autoplay-policy=no-user-gesture-required"]
     if headless:
         cmd += ["--headless=new", "--use-fake-ui-for-media-stream"]
+    # e.g. CHROME_EXTRA_ARGS="--no-sandbox" under proot-distro on Termux (see launch_chrome.sh); no-op elsewhere.
+    cmd += os.environ.get("CHROME_EXTRA_ARGS", "").split()
     proc = subprocess.Popen(cmd + [url], env=env, stdout=open(profile / "chrome.log", "a"),
                             stderr=subprocess.STDOUT, start_new_session=True)
     for _ in range(60):
