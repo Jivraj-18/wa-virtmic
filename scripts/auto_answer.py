@@ -64,7 +64,7 @@ def client_streams(kind):
     for o in json.loads(out or "[]"):
         p = o.get("properties", {})
         who = f'{p.get("application.process.binary", "")} {p.get("application.name", "")}'.lower()
-        if "chrome" in who:
+        if "chrom" in who:  # Google Chrome ("chrome") and Debian/Termux Chromium ("chromium")
             res.append([str(o["index"]), str(o.get("source", o.get("sink")))])
     return res
 
@@ -103,7 +103,7 @@ END_CALL_TOOL = {"type": "function", "name": "end_call",
                                 "clearly says goodbye. Say a short goodbye first, then call this.",
                  "parameters": {"type": "object", "properties": {}}}
 
-CALL_ACTIVE_JS = """() => !!document.querySelector('[aria-label="Call controls"], [aria-label="End call"], [aria-label="Mute microphone"]')"""
+CALL_ACTIVE_JS = """() => !!document.querySelector('[aria-label="Call controls"], [aria-label="End call"], [aria-label="End icon button"], [aria-label="Mute microphone"]')"""
 
 
 def start_rec(device: str, path: Path) -> subprocess.Popen:
@@ -128,8 +128,10 @@ def call_active(page) -> bool:
 
 
 def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", context: str | None = None,
-                caller: str | None = None):
+                caller: str | None = None, speak_first: bool = True, extra_instructions: str = ""):
     """Record BOTH sides for the whole call (accept -> hang-up) and talk to the caller, then transcribe.
+    speak_first=False: the live agent stays silent until the other person speaks (outgoing calls: wa_call.py),
+                       so it doesn't greet a phone that is still ringing.
     mode=realtime: live two-way conversation via OpenAI Realtime (realtime_agent.py); the live
                    transcript goes to transcript_live.txt. Falls back to the greeting if it fails to start.
     mode=greeting: play the pre-synthesized greeting WAV once (the old behaviour).
@@ -188,8 +190,9 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 "instructions": build_instructions(ctx, caller) + hang + e2["instructions_suffix"]},
                 transcript=d / "transcript_live.txt", log=log)
         else:
+            kw = {} if speak_first else {"greeting": None}
             agent = Agent(transcript=d / "transcript_live.txt", log=log, tools=[END_CALL_TOOL], on_tool=on_tool,
-                          instructions=INSTRUCTIONS + hang)
+                          instructions=INSTRUCTIONS + hang + extra_instructions, **kw)
         th = agent.start_thread(max_secs)
         th.join(10)  # the thread only exits early if the realtime session failed
         if not th.is_alive():
