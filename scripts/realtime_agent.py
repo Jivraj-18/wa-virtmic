@@ -29,6 +29,9 @@ Always speak English. Only switch to Hindi if the caller clearly speaks Hindi to
 If the caller is silent or says 'hello?' repeatedly, ask whether they can hear you clearly.
 If asked, explain you are an AI speaking through a virtual microphone inside a cloud dev container."""
 
+TRANSCRIBE_PROMPT = ("A phone call in English, often Indian English, sometimes mixed with Hindi (Hinglish). "
+                     "Write Hindi words in Latin script. Short replies like 'yes', 'okay', 'hello', 'bye' are common.")
+
 GREETING = ("In English, greet the caller warmly in one short sentence, say you are an AI assistant on a test call, "
             "and ask if they can hear you clearly.")
 
@@ -49,15 +52,17 @@ def client_secret(instructions: str) -> str:
 class Agent:
     def __init__(self, transcript: Path | None = None, log=print, instructions=INSTRUCTIONS, greeting=GREETING,
                  in_device="callout_sink.monitor", out_device="virtmic_sink",
-                 tools: list | None = None, on_tool=None, on_event=None, session_extra: dict | None = None):
+                 tools: list | None = None, on_tool=None, on_event=None, session_extra: dict | None = None,
+                 on_line=None):
         """Extension hooks (shared by experiments, keep them backward compatible):
         tools         : list of Realtime function tools [{"type":"function","name":..,"description":..,"parameters":{..}}]
         on_tool       : async (name, args: dict, agent) -> result (any JSON-able). May be slow; the result is sent back
                         as function_call_output and a new response is requested automatically.
         on_event      : (event: dict, agent) -> None, sync or async; called for every server event.
         session_extra : dict merged into the session.update "session" object (e.g. turn_detection tweaks).
+        on_line       : (who: "AI"|"CALLER", text) -> None, called for every transcript line (e.g. hangup.py).
         While running, agent.respond(instructions) makes the model speak (e.g. a filler line), agent.ws is the socket."""
-        self.tools, self.on_tool, self.on_event = tools or [], on_tool, on_event
+        self.tools, self.on_tool, self.on_event, self.on_line = tools or [], on_tool, on_event, on_line
         self.session_extra = session_extra or {}
         self.ws = None
         self.loop = None
@@ -76,6 +81,11 @@ class Agent:
         if self.transcript:
             with open(self.transcript, "a") as f:
                 f.write(line + "\n")
+        if self.on_line:
+            try:
+                self.on_line(who.strip(), text.strip())
+            except Exception as e:
+                self.log(f"on_line hook failed: {type(e).__name__}: {e}")
 
     # ---- audio out --------------------------------------------------------
     async def start_player(self):
@@ -139,7 +149,11 @@ class Agent:
                               "turn_detection": {"type": "server_vad",
                                                  "threshold": float(os.environ.get("REALTIME_VAD_THRESHOLD", "0.6")),
                                                  "prefix_padding_ms": 300, "silence_duration_ms": 500},
-                              "transcription": {"model": "gpt-4o-transcribe"}},
+                              # language + prompt: without them short/noisy phone audio came back as random
+                              # languages (Urdu, Telugu, Korean, Greek...) on real calls. A bias, not a guarantee.
+                              "transcription": {"model": "gpt-4o-transcribe",
+                                                "language": os.environ.get("REALTIME_TRANSCRIBE_LANG", "en"),
+                                                "prompt": TRANSCRIBE_PROMPT}},
                     "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": VOICE}}}
             if self.tools:
                 sess["tools"], sess["tool_choice"] = self.tools, "auto"

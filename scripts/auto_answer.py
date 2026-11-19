@@ -169,6 +169,10 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
     time.sleep(1.0)
     agent = th = None
     hangup = threading.Event()
+    # The SCRIPT decides when to hang up (hangup.py watches the transcript); the AI only has to say goodbye.
+    # It used to rely on the model calling an end_call tool, which it often "promised" but never did.
+    from hangup import HangupWatcher
+    watcher = HangupWatcher(lambda reason: hangup.set(), log=log)
 
     async def on_tool(name, args, ag):
         if name == "end_call":
@@ -178,20 +182,22 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         return {"error": f"unknown tool {name}"}
 
     if mode == "realtime":
-        hang = "\nIf the caller asks you to end or cut the call, say a one-line goodbye and then call the end_call tool."
+        hang = ("\nIf the caller asks you to end or cut the call, say ONE short goodbye line and stop talking - "
+                "the call is hung up automatically after your goodbye. Never say goodbye otherwise.")
         if ctx:
             from context import make_agent, build_instructions
             import tools  # E2: search_knowledge / read_file / ask_agent over the context folder, with holding lines
             e2 = tools.agent_kwargs(ctx["path"], d, log=log)
             agent = make_agent(ctx, caller, extra={
-                "tools": [END_CALL_TOOL] + e2["tools"],
+                "tools": e2["tools"],
+                "on_line": watcher.feed,
                 "on_tool": tools.chain_on_tool(e2["on_tool"], on_tool),  # E2 returns None for end_call
                 "on_event": e2["on_event"],  # needed for the holding-line logic
                 "instructions": build_instructions(ctx, caller) + hang + e2["instructions_suffix"]},
                 transcript=d / "transcript_live.txt", log=log)
         else:
             kw = {} if speak_first else {"greeting": None}
-            agent = Agent(transcript=d / "transcript_live.txt", log=log, tools=[END_CALL_TOOL], on_tool=on_tool,
+            agent = Agent(transcript=d / "transcript_live.txt", log=log, on_line=watcher.feed,
                           instructions=INSTRUCTIONS + hang + extra_instructions, **kw)
         th = agent.start_thread(max_secs)
         th.join(10)  # the thread only exits early if the realtime session failed
@@ -223,7 +229,7 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 how = page.evaluate(END_CALL_JS)
             except Exception as e:
                 how = f"error {e}"
-            log(f"end_call requested by the agent -> clicked: {how}")
+            log(f"hang-up requested -> clicked: {how}")
             clicked = True
         gone = 0 if call_active(page) else gone + 1
         if gone >= 6:
