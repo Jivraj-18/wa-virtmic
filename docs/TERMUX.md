@@ -65,16 +65,28 @@ bash scripts/measure_resources.sh before
 
 This is your baseline: Termux + git + an empty clone, nothing else installed yet.
 
-### 4. Install Debian inside proot-distro
+### 4. Install Debian inside proot-distro, and create a non-root user
 
 ```bash
 proot-distro install debian
 proot-distro login debian
 ```
 
-You're now root inside a Debian arm64 rootfs. Everything from here until you `exit` runs there.
+You're now **root** inside a Debian arm64 rootfs - but PulseAudio and Chromium both refuse to run as root
+(PulseAudio exits with "not intended to be run as root"; Chromium needs `--no-sandbox` as root, which is
+worse). Create a regular user now and do everything else as that user:
 
-### 5. Clone the repo again, inside the distro, and install dependencies
+```bash
+apt update -qq && apt install -y -qq sudo
+useradd -m -s /bin/bash phone
+echo "phone ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+su - phone
+```
+
+You're now `phone@localhost` with a fresh `$HOME` (`/home/phone`). Next time, skip `su` and log in directly
+as this user: `proot-distro login debian --user phone`.
+
+### 5. Clone the repo, inside the distro as `phone`, and install dependencies
 
 (proot-distro's rootfs is its own filesystem - it doesn't automatically see Termux's `$HOME`, so clone fresh here.)
 
@@ -84,8 +96,11 @@ cd wa-virtmic
 bash scripts/install_termux.sh
 ```
 
-This installs chromium (symlinked as `google-chrome`), PulseAudio, ffmpeg, the Python modules and Claude Code -
-same idempotent pattern as `scripts/install.sh`, just arm64-flavored. Re-run any time; it skips what's already there.
+`sudo` inside the script picks up the NOPASSWD rule from step 4, so it won't prompt. This installs chromium
+(symlinked as `google-chrome`), PulseAudio, ffmpeg, the Python modules and Claude Code - same idempotent
+pattern as `scripts/install.sh`, just arm64-flavored. Re-run any time; it skips what's already there -
+including if you already ran it as root by mistake, apt/dpkg state is system-wide so nothing reinstalls,
+only the per-user bits (Claude Code, pip's `--break-system-packages` target) redo their checks.
 
 ### 6. LLM gateway settings
 
@@ -165,7 +180,7 @@ Only needed if you want to see the GUI on a different screen (e.g. to scan the W
 device's camera while this phone just runs headless). In the Debian session:
 
 ```bash
-apt install -y x11vnc novnc
+sudo apt install -y x11vnc novnc
 x11vnc -display :0 -nopw -forever -shared &
 websockify -D 6080 localhost:5900
 ```
@@ -173,9 +188,9 @@ websockify -D 6080 localhost:5900
 Then tunnel port 6080 publicly (no account needed for a quick tunnel):
 
 ```bash
-curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o /usr/local/bin/cloudflared
-chmod +x /usr/local/bin/cloudflared
-cloudflared tunnel --url http://localhost:6080
+curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -o ~/cloudflared
+chmod +x ~/cloudflared
+~/cloudflared tunnel --url http://localhost:6080
 ```
 
 It prints a `https://*.trycloudflare.com` URL - open `<that url>/vnc.html?autoconnect=true` in any browser,
@@ -215,6 +230,7 @@ login shell exiting, but the whole proot-distro process tree still dies if Andro
 | Symptom | Likely fix |
 |---|---|
 | `playwright` import fails inside Debian | arm64 wheel/driver issue - the one step flagged as unverified; try `pip install --force-reinstall playwright` or check the Playwright GitHub issues for `linux-arm64` |
+| PulseAudio: "not intended to be run as root", then every `pactl` call says "Connection refused" | you're still root in the proot login - create and switch to the `phone` user (step 4) and redo audio_setup.sh/launch_chrome.sh as that user |
 | Chrome "cannot open display" | `export DISPLAY=:0` not set, or `termux-x11 :0 &` not running, or the X11 socket isn't shared into the proot - check `ls /tmp/.X11-unix/` inside the distro |
 | Termux/Debian processes die when the screen turns off | `termux-wake-lock`, disable battery optimization for Termux |
 | `pip install` fails with "externally-managed-environment" | already handled by `install_termux.sh` (`--break-system-packages`); if calling pip by hand, add that flag |
