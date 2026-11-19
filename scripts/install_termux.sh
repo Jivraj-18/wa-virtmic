@@ -25,7 +25,7 @@ done
 if [ ${#missing[@]} -gt 0 ]; then
   echo "install_termux.sh: apt install ${missing[*]}"
   $SUDO apt-get update -qq
-  $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
 else
   echo "install_termux.sh: apt packages already installed"
 fi
