@@ -19,7 +19,7 @@ fi
 
 # --- apt: chromium (arm64) + PulseAudio + ffmpeg --------------------------------------------------
 missing=()
-for p in chromium pulseaudio pulseaudio-utils ffmpeg ripgrep poppler-utils ca-certificates curl git; do
+for p in chromium pulseaudio pulseaudio-utils ffmpeg ripgrep poppler-utils ca-certificates curl git python3-pip python3-venv; do
   dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p")
 done
 if [ ${#missing[@]} -gt 0 ]; then
