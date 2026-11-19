@@ -225,19 +225,18 @@ Cloudflare account (`cloudflared tunnel login` / `create` / a `config.yml` route
 
 ### 12. Control it with Claude Code's Remote Control
 
-Still in the Debian session, with Claude Code installed (step 5):
+Still in the Debian session, with Claude Code installed (step 5), run this as a plain shell command (not
+inside an interactive `claude` session) in the folder you want to work in:
 
 ```bash
-claude
-# inside Claude Code:
-/remote-control   # or: claude remote-control, depending on your Claude Code version
+claude remote-control
 ```
 
-This registers the `~/wa-virtmic` folder on the phone as attachable. From then on, any Claude Code session
-(including a cloud one at claude.ai/code) can attach to it and run `make demo`, read `auto_answer.log`,
-restart the audio setup, edit files, etc. directly on the phone - no SSH needed. Use this for the "driving
-it" half; Termux:X11/the tunnel above is for the "watching the Chrome window" half - you'll likely want both
-at least for the first WhatsApp QR scan / Meet join.
+This registers `~/wa-virtmic` on the phone as a folder the Claude Code app (desktop or claude.ai/code) can
+attach to - it'll show up there as a computer/folder to connect. From then on, any Claude Code session can
+attach to it and run `make demo`, read `auto_answer.log`, restart the audio setup, edit files, etc. directly
+on the phone - no SSH needed. Use this for the "driving it" half; Termux:X11/the tunnel above is for the
+"watching the Chrome window" half - you'll likely want both at least for the first WhatsApp QR / Meet join.
 
 ## Keeping it alive in the background
 
