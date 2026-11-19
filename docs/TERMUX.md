@@ -137,7 +137,19 @@ in Termux's notification, or holding Volume Down and pressing N, also opens a ne
 
 ### 8. Audio + Chrome, back in the Debian session
 
-Switch back to the Debian login session from step 5:
+proot-distro regenerates `/etc/profile.d/termux-profile.sh` on every login to mirror some of Termux's own
+environment into the container - including `PULSE_SERVER=127.0.0.1`, left over from Termux's *own* native
+audio bridge (irrelevant here, and actively wrong: it makes the Debian-side `pactl`/PulseAudio refuse to
+autospawn its own self-contained server and instead try, and fail, to reach a real server at that TCP
+address). Editing that generated file doesn't stick - unset it in your own shell instead, once, and it's
+permanent from then on:
+
+```bash
+echo 'unset PULSE_SERVER' >> ~/.bashrc
+unset PULSE_SERVER
+```
+
+Then:
 
 ```bash
 export DISPLAY=:0
@@ -231,6 +243,7 @@ login shell exiting, but the whole proot-distro process tree still dies if Andro
 |---|---|
 | `playwright` import fails inside Debian | arm64 wheel/driver issue - the one step flagged as unverified; try `pip install --force-reinstall playwright` or check the Playwright GitHub issues for `linux-arm64` |
 | PulseAudio: "not intended to be run as root", then every `pactl` call says "Connection refused" | you're still root in the proot login - create and switch to the `phone` user (step 4) and redo audio_setup.sh/launch_chrome.sh as that user |
+| PulseAudio: "User-configured server at 127.0.0.1, refusing to start/autospawn", every `pactl` call "Connection refused" (as the `phone` user, not root) | `PULSE_SERVER=127.0.0.1` leaking in from proot-distro's auto-generated `/etc/profile.d/termux-profile.sh` (see step 8) - `echo 'unset PULSE_SERVER' >> ~/.bashrc` then `unset PULSE_SERVER` in the current shell; editing that generated file directly doesn't stick, it's rewritten on every login |
 | Chrome "cannot open display" | `export DISPLAY=:0` not set, or `termux-x11 :0 &` not running, or the X11 socket isn't shared into the proot - check `ls /tmp/.X11-unix/` inside the distro |
 | Termux/Debian processes die when the screen turns off | `termux-wake-lock`, disable battery optimization for Termux |
 | `pip install` fails with "externally-managed-environment" | already handled by `install_termux.sh` (`--break-system-packages`); if calling pip by hand, add that flag |
