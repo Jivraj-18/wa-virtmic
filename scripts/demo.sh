@@ -78,7 +78,7 @@ missing=""
 for b in google-chrome pulseaudio pactl parec pacat paplay parecord ffmpeg curl; do
   command -v "$b" >/dev/null 2>&1 || missing="$missing $b"
 done
-for m in edge_tts numpy playwright websockets yaml; do
+for m in numpy playwright websockets yaml; do
   "$PY" -c "import $m" 2>/dev/null || missing="$missing py:$m"
 done
 if [ -z "$missing" ]; then ok "all binaries and python modules present"

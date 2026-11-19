@@ -68,7 +68,7 @@ def port_open(port, host="127.0.0.1", timeout=1.0) -> bool:
 def check_binaries():
     need = ["google-chrome", "pulseaudio", "pactl", "parec", "pacat", "paplay", "parecord", "ffmpeg", "curl"]
     miss = [b for b in need if not shutil.which(b)]
-    mods = [m for m in ("edge_tts", "numpy", "playwright", "websockets", "yaml")
+    mods = [m for m in ("numpy", "playwright", "websockets", "yaml")
             if run([sys.executable, "-c", f"import {m}"]).returncode != 0]
     if miss or mods:
         report("FAIL", "binaries + modules", f"missing: {' '.join(miss + mods)}", "bash scripts/install.sh")

@@ -42,7 +42,7 @@ echo "install_termux.sh: $CHROME_BIN symlinked as google-chrome"
 
 # --- pip: only the modules that don't import yet ---------------------------------------------------
 pipmiss=()
-for pair in edge_tts:edge-tts numpy:numpy playwright:playwright websockets:websockets yaml:pyyaml; do
+for pair in numpy:numpy playwright:playwright websockets:websockets yaml:pyyaml; do
   python3 -c "import ${pair%%:*}" 2>/dev/null || pipmiss+=("${pair#*:}")
 done
 if [ ${#pipmiss[@]} -gt 0 ]; then
