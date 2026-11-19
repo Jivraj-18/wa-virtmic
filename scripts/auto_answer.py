@@ -220,6 +220,7 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
     recorded = bool(recs)
     while time.time() - t0 < max_secs:  # record until hang-up (call UI + Chrome mic both gone for 3 s)
         n += 1
+        beat()
         if recs and n % 20 == 0 and diskguard.low(CALLS):  # ~every 10 s
             log(f"WARNING disk: free space fell to {diskguard.free_gb(CALLS):.1f} GB - stopping the recording "
                 "(call continues)")
@@ -283,6 +284,17 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             log(f"summary failed: {type(e).__name__}: {e}")
 
 
+HEARTBEAT = os.environ.get("AA_HEARTBEAT")  # answer_daemon.sh: file touched while we're alive and not stuck
+
+
+def beat():
+    if HEARTBEAT:
+        try:
+            Path(HEARTBEAT).touch()
+        except OSError:
+            pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--greeting", default=GREETING)
@@ -304,6 +316,10 @@ def main():
         log("mic permission granted to", ORIGIN, "- watching for incoming calls (Ctrl+C to stop)")
         warned = False
         while True:
+            beat()
+            if not b.is_connected():  # Chrome died/restarted: exit so the supervisor restarts us cleanly
+                log("lost the CDP connection to Chrome - exiting")
+                sys.exit(3)
             pages = [p for c in b.contexts for p in c.pages if "whatsapp" in p.url]
             for p in pages:
                 try:
