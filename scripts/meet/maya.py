@@ -260,7 +260,7 @@ class Maya:
         self.suggester.add(f"{sender} (chat)", text)
         self.event("chat_in", sender=sender, text=text)
         await self.inject(line)
-        # chat needs name AND a question/request: "Maya have joined anand" (an announcement) made her speak out loud
+        # chat needs name AND a question/request: "Maya has joined, <name>" (an announcement) made her speak out loud
         asks = "?" in text or re.search(r"\b(can|could|would|will|what|who|why|how|when|where|tell|please|explain|"
                                          r"summari[sz]e|give|list|do you|are you|is it)\b", text, re.I)
         if is_addressed(text) and asks:
