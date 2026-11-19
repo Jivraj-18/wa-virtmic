@@ -128,7 +128,8 @@ def call_active(page) -> bool:
 
 
 def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", context: str | None = None,
-                caller: str | None = None, speak_first: bool = True, extra_instructions: str = ""):
+                caller: str | None = None, speak_first: bool = True, extra_instructions: str = "",
+                engine: str | None = None):
     """Record BOTH sides for the whole call (accept -> hang-up) and talk to the caller, then transcribe.
     speak_first=False: the live agent stays silent until the other person speaks (outgoing calls: wa_call.py),
                        so it doesn't greet a phone that is still ringing.
@@ -197,7 +198,13 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 transcript=d / "transcript_live.txt", log=log)
         else:
             kw = {} if speak_first else {"greeting": None}
-            agent = Agent(transcript=d / "transcript_live.txt", log=log, on_line=watcher.feed,
+            engine = engine or os.environ.get("VOICE_ENGINE", "realtime")
+            AgentCls = Agent
+            if engine == "live":  # full-duplex GPT-Live over WebRTC (live_agent.py)
+                from live_agent import LiveAgent as AgentCls
+                kw.setdefault("greeting", "Greet the caller in one short sentence and say you are an AI assistant.")
+            log(f"voice engine: {engine}")
+            agent = AgentCls(transcript=d / "transcript_live.txt", log=log, on_line=watcher.feed,
                           instructions=INSTRUCTIONS + hang + extra_instructions, **kw)
         th = agent.start_thread(max_secs)
         th.join(10)  # the thread only exits early if the realtime session failed

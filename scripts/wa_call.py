@@ -10,7 +10,7 @@ No UI searching: names are resolved from WhatsApp Web's own local contact store 
 answers once the callee speaks, so it doesn't talk over the ringing. Recording/transcripts: same as
 auto_answer.py (scripts/calls/<ts>/).
 """
-import argparse, re, sys, time
+import argparse, os, re, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,6 +43,8 @@ def main():
     ap.add_argument("who", help="contact name substring, or a phone number with country code")
     ap.add_argument("--lookup", action="store_true", help="only list matching contacts, don't call")
     ap.add_argument("--max", type=int, default=600, help="max call seconds (default 600)")
+    ap.add_argument("--engine", choices=["realtime", "live"], default=os.environ.get("VOICE_ENGINE", "live"),
+                    help="live = full-duplex gpt-live-1 (default); realtime = turn-based gpt-realtime-2.1")
     ap.add_argument("--brief", default="", help="extra instructions for this call (purpose, message to pass on)")
     a = ap.parse_args()
 
@@ -78,7 +80,7 @@ def main():
         btn.click()
         aa.log(f"dialing {name} (+{num}) - agent waits for them to speak first")
         time.sleep(2)
-        aa.handle_call(page, str(aa.HERE / "greeting.wav"), a.max, "realtime", None, name, speak_first=False,
+        aa.handle_call(page, str(aa.HERE / "greeting.wav"), a.max, "realtime", None, name, speak_first=False, engine=a.engine,
                        extra_instructions="\nThis is an OUTGOING call you placed. Wait for the other person to "
                                           "say hello, then introduce yourself briefly. Ignore ringing tones."
                                           + (f"\nCall brief: {a.brief}" if a.brief else ""))
