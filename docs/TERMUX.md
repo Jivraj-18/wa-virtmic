@@ -96,15 +96,29 @@ cp scripts/.env.example scripts/.env
 
 ### 7. Start the GUI surface (Termux:X11)
 
-Open a **new** Termux session (swipe from the left edge, or the hamburger menu > New session) - leave the
-Debian login from step 4-5 running, don't exit it:
+The `termux-x11` command isn't installed yet - it comes from a separate Termux package, not just the
+Termux:X11 app. From your Debian login (step 4-6), go back to plain Termux first:
 
 ```bash
+exit
+```
+
+(this only leaves the proot-distro login shell - your files and the Debian rootfs are untouched). Then,
+in Termux itself:
+
+```bash
+pkg install -y x11-repo
+pkg install -y termux-x11-nightly
 termux-x11 :0 &
 ```
 
-Then open the **Termux:X11** app (just installed) - it connects to that `:0` display. You'll see a blank
-desktop; that's expected until Chrome starts in the next step.
+Open the **Termux:X11** app - it connects to that `:0` display. You'll see a blank desktop; that's expected
+until Chrome starts in a later step. You do **not** need a second Termux session for this: `termux-x11 :0 &`
+stays running in the background of this same Termux shell even after you log back into the Debian proot on
+top of it in the next step (`proot-distro login debian` runs the login as a child process - it doesn't
+replace or kill this shell's background jobs). If you'd rather use a second session anyway, Termux's
+left-edge drawer may be intercepted by Android's gesture navigation on some phones - the hamburger icon
+in Termux's notification, or holding Volume Down and pressing N, also opens a new session on most devices.
 
 ### 8. Audio + Chrome, back in the Debian session
 
