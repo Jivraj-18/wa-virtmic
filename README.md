@@ -17,7 +17,8 @@ A proof of concept: an AI voice acts as the **microphone** for a WhatsApp Web vo
    without a phone, `make stop` stops the auto-answerer.
 
 No `make`? Use `bash scripts/demo.sh` and `python3 scripts/doctor.py`. On Windows (WhatsApp Desktop + VB-Cable, untested) see
-[`WINDOWS.md`](WINDOWS.md).
+[`WINDOWS.md`](WINDOWS.md). On your own Android phone instead of a Codespace (Termux + proot-distro, untested) see
+[`docs/TERMUX.md`](docs/TERMUX.md).
 
 See [`scripts/README.md`](scripts/README.md) for the details, the manual steps and test results.
 
