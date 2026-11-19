@@ -24,7 +24,7 @@ def tts_edge(text: str, voice: str, path: str) -> None:
 
 
 def tts_gateway(text: str, voice: str, path: str) -> None:
-    body = {"model": os.environ.get("LLM_GATEWAY_TTS_MODEL", "gpt-4o-mini-tts"),
+    body = {"model": gateway.TTS_MODEL,
             "voice": voice, "input": text, "response_format": "mp3",
             "instructions": "Speak clearly and warmly, like a friendly phone agent."}
     req = urllib.request.Request(

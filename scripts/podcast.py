@@ -17,7 +17,7 @@ sys.path.insert(0, str(HERE))
 import gateway  # noqa: E402
 from media_player import RATE, decode  # noqa: E402
 
-CHAT_MODEL = os.environ.get("PODCAST_MODEL", "gpt-4.1-mini")
+CHAT_MODEL = os.environ.get("PODCAST_MODEL", gateway.CHAT_MODEL)
 WPM = 110  # target words per minute: the LLM overshoots the word budget by ~10-25 %, TTS hosts speak ~120-125 wpm
 GAP_S = 0.25
 VOICES = {  # host -> (gateway voice, edge-tts voice)
@@ -44,7 +44,7 @@ def read_knowledge(folder: str | Path, max_chars: int = 12000) -> str:
 def _post(path: str, body: dict, timeout=90) -> bytes:
     """POST to the gateway with backoff on 429/5xx."""
     for attempt in range(5):
-        req = urllib.request.Request(gateway.base() + path, data=json.dumps(body).encode(),
+        req = urllib.request.Request(gateway.base() + path, data=json.dumps(gateway.adapt_chat(body)).encode(),
                                      headers={**gateway.auth_header(), "Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -85,7 +85,7 @@ def tts_line(text: str, host: str, engine: str = "gateway") -> bytes:
         mp3 = os.path.join(d, "l.mp3")
         if engine == "gateway" and gateway.has_gateway():
             try:
-                body = {"model": os.environ.get("LLM_GATEWAY_TTS_MODEL", "gpt-4o-mini-tts"), "voice": gw_voice,
+                body = {"model": gateway.TTS_MODEL, "voice": gw_voice,
                         "input": text, "response_format": "mp3",
                         "instructions": "You are a warm, upbeat podcast host. Conversational pace."}
                 Path(mp3).write_bytes(_post("/openai/v1/audio/speech", body, timeout=60))

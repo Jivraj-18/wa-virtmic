@@ -79,12 +79,12 @@ Answer "yes" if it continues the conversation with Maya (a follow-up question, a
 def _is_followup(q, a, u, speaker=None) -> bool:
     import urllib.request, uuid
     import gateway
-    body = {"model": os.environ.get("MAYA_FOLLOWUP_MODEL", "gpt-4.1-mini"), "max_tokens": 2, "temperature": 0,
+    body = {"model": os.environ.get("MAYA_FOLLOWUP_MODEL", gateway.CHAT_MODEL), "max_tokens": 2, "temperature": 0,
             "messages": [{"role": "user", "content": FOLLOWUP_PROMPT.format(
                 q=q[:300], a=a[:400], u=u[:300], who=f" (by {speaker})" if speaker else "")},
                          {"role": "system", "content": f"nonce {uuid.uuid4().hex[:8]}"}]}
     try:
-        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(body).encode(),
+        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(gateway.adapt_chat(body)).encode(),
                                      headers={**gateway.auth_header(), "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=6) as r:
             return json.load(r)["choices"][0]["message"]["content"].strip().lower().startswith("y")

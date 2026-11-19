@@ -19,7 +19,7 @@ from gateway import load_env
 
 RATE = 24000
 CHUNK = RATE * 2 // 50  # 20 ms of s16le mono
-MODEL = os.environ.get("REALTIME_MODEL", "gpt-realtime")
+MODEL = os.environ.get("REALTIME_MODEL", "gpt-realtime-2.1")  # newest; ~+0.26 s vs gpt-realtime (2026-11-19)
 VOICE = os.environ.get("REALTIME_VOICE", "marin")
 
 INSTRUCTIONS = """You are a friendly AI voice assistant answering a WhatsApp voice call.

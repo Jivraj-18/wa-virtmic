@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import gateway  # noqa: E402
 
-MODEL = "gpt-4.1-mini"
+MODEL = gateway.CHAT_MODEL
 TRANSCRIPTS = ("transcript.txt", "transcript_live.txt", "agent_transcript.txt")
 
 PROMPT = """You write short after-call notes for {owner}, whose AI assistant just answered a WhatsApp call for them.
@@ -32,7 +32,7 @@ Anything the AI got wrong, could not answer, or misheard. "None" if nothing."""
 
 
 def chat(messages, model=MODEL, retries=5) -> str:
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0.2}).encode()
+    body = json.dumps(gateway.adapt_chat({"model": model, "messages": messages, "temperature": 0.2})).encode()
     for i in range(retries):
         req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=body,
                                      headers={**gateway.auth_header(), "Content-Type": "application/json"})

@@ -32,6 +32,9 @@ CLI
 import argparse, asyncio, json, math, os, re, shutil, subprocess, sys, time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gateway  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
@@ -40,7 +43,7 @@ READ_CAP = 12000            # chars returned by read_file
 SNIPPET_LINES = 3           # context lines around a hit
 ASK_TIMEOUT = float(os.environ.get("E2_ASK_TIMEOUT", 90))
 ASK_MODEL = os.environ.get("E2_ASK_MODEL", "sonnet")
-LLM_FALLBACK_MODEL = os.environ.get("E2_LLM_FALLBACK_MODEL", "gpt-4.1-mini")  # "" disables the gateway tier
+LLM_FALLBACK_MODEL = os.environ.get("E2_LLM_FALLBACK_MODEL", gateway.CHAT_MODEL)  # "" disables the gateway tier
 CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or str(Path.home() / ".local/bin/claude")
 SLOW_TOOLS = {"ask_agent"}
 FILLER_AFTER = float(os.environ.get("E2_FILLER_AFTER", 1.5))  # seconds before a fast tool counts as slow
@@ -237,7 +240,7 @@ class ContextTools:
              "be read aloud, with exact numbers, dates and any calculation result. If the documents don't contain "
              f"the answer, say so. (request {uuid.uuid4().hex[:8]})\n\n" + self._all_text()},
             {"role": "user", "content": question}]}
-        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(body).encode(),
+        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(gateway.adapt_chat(body)).encode(),
                                      headers={**gateway.auth_header(), "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=45) as r:
             return json.load(r)["choices"][0]["message"]["content"].strip()

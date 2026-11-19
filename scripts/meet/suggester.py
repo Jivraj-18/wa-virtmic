@@ -9,7 +9,7 @@ from collections import deque
 
 import gateway
 
-MODEL = "gpt-4.1-mini"
+MODEL = gateway.CHAT_MODEL
 PROMPT = """You are Maya, a quiet AI participant in a team meeting. Below is the recent meeting transcript
 (speech-to-text, so expect small errors). Decide whether ONE short chat message would genuinely help the
 meeting right now: a consideration nobody raised, a way to unblock a discussion going in circles, or a
@@ -25,7 +25,7 @@ Transcript:
 
 
 def chat_complete(messages, model=MODEL, timeout=30, retries=3) -> str:
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0.4, "max_tokens": 80}).encode()
+    body = json.dumps(gateway.adapt_chat({"model": model, "messages": messages, "temperature": 0.4, "max_tokens": 80})).encode()
     for attempt in range(retries):
         req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=body,
                                      headers={**gateway.auth_header(), "Content-Type": "application/json"})
