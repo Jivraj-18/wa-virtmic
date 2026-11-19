@@ -84,7 +84,34 @@ su - phone
 ```
 
 You're now `phone@localhost` with a fresh `$HOME` (`/home/phone`). Next time, skip `su` and log in directly
-as this user: `proot-distro login debian --user phone`.
+as this user: `proot-distro login debian --user phone --shared-x11` (see step 7 for why `--shared-x11`).
+
+**Three environment variables need fixing every single login, and neither `~/.bashrc` nor `~/.profile` get
+sourced by `proot-distro login --user ...`** (only `/etc/profile.d/*` does) **-** so fix them there instead
+of in a dotfile that silently never runs. Exit back to plain Termux and write one file (no root/sudo needed,
+it's just Termux's own app storage):
+
+```bash
+exit
+cat > "$PREFIX/var/lib/proot-distro/containers/debian/rootfs/etc/profile.d/zz-wa-virtmic.sh" <<'EOF'
+export DISPLAY=:0
+unset PULSE_SERVER
+export CHROME_EXTRA_ARGS="--no-sandbox"
+EOF
+proot-distro login debian --user phone --shared-x11
+```
+
+Why each one, in order you'll hit them if you skip this:
+- `DISPLAY=:0` - Chrome needs to know where Termux:X11's display is; nothing sets this for you.
+- `unset PULSE_SERVER` - proot-distro's *own* `/etc/profile.d/termux-profile.sh` (auto-regenerated on every
+  login, editing it doesn't stick) sets `PULSE_SERVER=127.0.0.1` to mirror Termux's native audio bridge -
+  irrelevant here and actively wrong, since it makes PulseAudio refuse to autospawn its own self-contained
+  server and fail every `pactl` call with "Connection refused" instead. Our file is named `zz-...` so it
+  loads alphabetically *after* `termux-profile.sh` and wins.
+- `CHROME_EXTRA_ARGS="--no-sandbox"` - Chrome's sandbox hits a syscall `proot`'s ptrace-based emulation can't
+  handle and dies with `Trace/breakpoint trap`. `launch_chrome.sh` and `scripts/meet/browser.py` (Maya's
+  Chrome) both read this var and append it as-is; empty/unset anywhere else (Codespace included), so it's
+  Termux-only and safe (proot already removes any real privilege-escalation risk the sandbox would matter for).
 
 ### 5. Clone the repo, inside the distro as `phone`, and install dependencies
 
@@ -112,14 +139,7 @@ cp scripts/.env.example scripts/.env
 ### 7. Start the GUI surface (Termux:X11)
 
 The `termux-x11` command isn't installed yet - it comes from a separate Termux package, not just the
-Termux:X11 app. From your Debian login (step 4-6), go back to plain Termux first:
-
-```bash
-exit
-```
-
-(this only leaves the proot-distro login shell - your files and the Debian rootfs are untouched). Then,
-in Termux itself:
+Termux:X11 app. You should already be back in plain Termux after step 4's `exit`. There:
 
 ```bash
 pkg install -y x11-repo
@@ -128,52 +148,33 @@ termux-x11 :0 &
 ```
 
 Open the **Termux:X11** app - it connects to that `:0` display. You'll see a blank desktop; that's expected
-until Chrome starts in a later step. You do **not** need a second Termux session for this: `termux-x11 :0 &`
+until Chrome starts in the next step. You do **not** need a second Termux session for this: `termux-x11 :0 &`
 stays running in the background of this same Termux shell even after you log back into the Debian proot on
-top of it in the next step (`proot-distro login debian` runs the login as a child process - it doesn't
-replace or kill this shell's background jobs). If you'd rather use a second session anyway, Termux's
-left-edge drawer may be intercepted by Android's gesture navigation on some phones - the hamburger icon
-in Termux's notification, or holding Volume Down and pressing N, also opens a new session on most devices.
+top of it (`proot-distro login` runs as a child process - it doesn't replace or kill this shell's background
+jobs). If you'd rather use a second session anyway, Termux's left-edge drawer may be intercepted by Android's
+gesture navigation on some phones - the hamburger icon in Termux's notification, or holding Volume Down and
+pressing N, also opens a new session on most devices.
+
+`--shared-x11` (used in step 4's login command) tells proot-distro to bind Termux:X11's socket
+(`$PREFIX/tmp/.X11-unix/X0`) into the container at `/tmp/.X11-unix` - it's on by default, but pass it
+explicitly anyway; if `/tmp/.X11-unix/` is still empty inside Debian (`ls /tmp/.X11-unix/` to check), fall
+back to an explicit bind: `proot-distro login debian --user phone -b "$PREFIX/tmp/.X11-unix:/tmp/.X11-unix"`.
 
 ### 8. Audio + Chrome, back in the Debian session
 
-proot-distro regenerates `/etc/profile.d/termux-profile.sh` on every login to mirror some of Termux's own
-environment into the container - including `PULSE_SERVER=127.0.0.1`, left over from Termux's *own* native
-audio bridge (irrelevant here, and actively wrong: it makes the Debian-side `pactl`/PulseAudio refuse to
-autospawn its own self-contained server and instead try, and fail, to reach a real server at that TCP
-address). Editing that generated file doesn't stick - unset it in your own shell instead, once, and it's
-permanent from then on:
+Log back into Debian (now `DISPLAY`/`PULSE_SERVER`/`CHROME_EXTRA_ARGS` are all fixed by step 4's file, every
+login, automatically):
 
 ```bash
-echo 'unset PULSE_SERVER' >> ~/.bashrc
-unset PULSE_SERVER
-```
-
-Then:
-
-```bash
-export DISPLAY=:0
+proot-distro login debian --user phone --shared-x11
+cd wa-virtmic
 bash scripts/audio_setup.sh
 bash scripts/test_virtmic.sh        # should print AUDIO PRESENT
 bash scripts/launch_chrome.sh       # opens Chromium on Termux:X11, CDP on :9222
 ```
 
-If `launch_chrome.sh` can't connect to the display, check that the X11 socket is visible inside the distro
-(`ls /tmp/.X11-unix/`) - proot-distro normally shares Termux's `/tmp`, but this is the step most likely to
-need a tweak on a given device/Termux version.
-
-If Chrome dies immediately with `Trace/breakpoint trap`, that's Chrome's sandbox hitting a syscall `proot`'s
-ptrace-based emulation can't handle - a known Chrome-in-proot incompatibility. Disable the sandbox instead
-(safe here: proot already removes any real privilege-escalation risk the sandbox would matter for):
-
-```bash
-echo 'export CHROME_EXTRA_ARGS="--no-sandbox"' >> ~/.bashrc
-export CHROME_EXTRA_ARGS="--no-sandbox"
-bash scripts/launch_chrome.sh
-```
-
-`launch_chrome.sh` and `scripts/meet/browser.py` (Maya's Chrome) both read `CHROME_EXTRA_ARGS` and append it
-as-is; empty/unset anywhere else (Codespace included), so this is Termux-only.
+Confirmed working end to end on a real device: PulseAudio loopback (`AUDIO PRESENT`), Chrome launching with
+`--no-sandbox`, CDP answering on `:9222`, and `web.whatsapp.com` rendering in the Termux:X11 window.
 
 ### 9. Run the demo
 
@@ -255,9 +256,11 @@ login shell exiting, but the whole proot-distro process tree still dies if Andro
 | Symptom | Likely fix |
 |---|---|
 | `playwright` import fails inside Debian | arm64 wheel/driver issue - the one step flagged as unverified; try `pip install --force-reinstall playwright` or check the Playwright GitHub issues for `linux-arm64` |
-| PulseAudio: "not intended to be run as root", then every `pactl` call says "Connection refused" | you're still root in the proot login - create and switch to the `phone` user (step 4) and redo audio_setup.sh/launch_chrome.sh as that user |
-| PulseAudio: "User-configured server at 127.0.0.1, refusing to start/autospawn", every `pactl` call "Connection refused" (as the `phone` user, not root) | `PULSE_SERVER=127.0.0.1` leaking in from proot-distro's auto-generated `/etc/profile.d/termux-profile.sh` (see step 8) - `echo 'unset PULSE_SERVER' >> ~/.bashrc` then `unset PULSE_SERVER` in the current shell; editing that generated file directly doesn't stick, it's rewritten on every login |
-| Chrome "cannot open display" | `export DISPLAY=:0` not set, or `termux-x11 :0 &` not running, or the X11 socket isn't shared into the proot - check `ls /tmp/.X11-unix/` inside the distro |
+| PulseAudio: "not intended to be run as root", then every `pactl` call says "Connection refused" | you're still root in the proot login - create and switch to the `phone` user (step 4) |
+| PulseAudio: "User-configured server at 127.0.0.1, refusing to start/autospawn", every `pactl` call "Connection refused" (as `phone`, not root) | `zz-wa-virtmic.sh` (step 4) isn't in place yet, or you logged in with plain `proot-distro login debian` instead of `--user phone` - `~/.bashrc` does **not** get sourced by this login path, so a fix added there silently never runs |
+| Chrome dies instantly with `Trace/breakpoint trap` | `CHROME_EXTRA_ARGS` isn't reaching Chrome - same `zz-wa-virtmic.sh` cause as above |
+| Chrome: "Missing X server or $DISPLAY" / ozone_platform_x11 error | `DISPLAY` isn't set - same `zz-wa-virtmic.sh` cause as above |
+| Chrome "cannot open display" (different from the one above - gets as far as trying to connect) | `termux-x11 :0 &` not actually running, or the X11 socket isn't shared into the proot - check `ls /tmp/.X11-unix/` inside the distro (step 7's fallback bind) |
 | Termux/Debian processes die when the screen turns off | `termux-wake-lock`, disable battery optimization for Termux |
 | `pip install` fails with "externally-managed-environment" | already handled by `install_termux.sh` (`--break-system-packages`); if calling pip by hand, add that flag |
 | Want to start over cleanly | `proot-distro reset debian` (wipes only the distro, not Termux itself) |
