@@ -24,5 +24,5 @@ See [`scripts/README.md`](scripts/README.md) for the details, the manual steps a
 ## Experiments and results
 
 - Plan: [`EXPERIMENTS.md`](EXPERIMENTS.md) (E0 to E6). Per-experiment notes are in `experiments/<ID>/RESULTS.md`.
-- Results site (GitHub Pages from `docs/`): https://jivraj-18.github.io/wa-virtmic/
+- How it works (architecture diagrams, GitHub Pages from `docs/`): https://jivraj-18.github.io/wa-virtmic/
 - Test without a phone: `python3 scripts/sim_call.py experiments/E0/scripts/basic_qa.yaml --tag E0`

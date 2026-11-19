@@ -1,1 +1,0 @@
-card({id: "E5", status: "DONE", title: "\"Call me and I'll play it\": audio on demand", finding: "Simulated calls: the AI plays files from media/ or a 2-voice podcast it writes from knowledge/ (playable after ~6 s). Talking over the audio pauses it in ~0.4 s; \"continue\", \"next\", \"louder\", \"stop\" all work."});
