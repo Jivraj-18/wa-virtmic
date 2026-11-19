@@ -11,7 +11,9 @@ How it works (via CDP on :9222, Chrome started by launch_chrome.sh):
   4. Records BOTH sides for the whole call (virtmic = AI, callout_sink.monitor = caller) into calls/<ts>/:
      ai.wav, caller.wav, call_stereo.wav (L=AI R=caller), call_mix.mp3, transcript.txt (timestamped, whisper-1).
      Recording stops when the call UI and Chrome's mic stream are gone for 3 s.
-On first detection it dumps the call UI HTML to call_ui_<ts>.html for debugging selectors.
+On first detection it dumps the call UI HTML to call_ui_ringing.html for debugging selectors (overwritten each time).
+Storage (diskguard.py): calls/ is pruned oldest-first to CALLS_MAX_MB before each call; below DISK_MIN_FREE_GB free,
+recordings and debug dumps are skipped (or stopped mid-call) - the call is still answered.
 """
 import argparse, asyncio, json, os, re, signal, subprocess, sys, threading, time
 from pathlib import Path
@@ -22,6 +24,7 @@ sys.path.insert(0, str(HERE))
 from speak import play_wav, synth_wav  # noqa: E402
 from transcribe import segments  # noqa: E402
 from realtime_agent import INSTRUCTIONS, Agent  # noqa: E402
+import diskguard  # noqa: E402
 
 CALLS = HERE / "calls"
 
@@ -138,12 +141,19 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         ctx = load_context(context)
         max_secs = int(ctx["config"].get("max_call_seconds") or max_secs)
     ts = time.strftime("%Y%m%d_%H%M%S")
+    for old in diskguard.prune_dirs(CALLS):
+        log(f"disk: removed old call {old.name} (calls/ over {diskguard.CALLS_MAX_MB:g} MB)")
     d = CALLS / ts
     d.mkdir(parents=True, exist_ok=True)
     ai_wav, caller_wav = d / "ai.wav", d / "caller.wav"
-    recs = [start_rec("virtmic", ai_wav), start_rec("callout_sink.monitor", caller_wav)]
+    if diskguard.low(CALLS):
+        log(f"WARNING disk: only {diskguard.free_gb(CALLS):.1f} GB free (< {diskguard.MIN_FREE_GB:g} GB) - "
+            "answering WITHOUT recording")
+        recs = []
+    else:
+        recs = [start_rec("virtmic", ai_wav), start_rec("callout_sink.monitor", caller_wav)]
     t0 = time.time()
-    log(f"recording call -> {d}")
+    log(f"{'recording' if recs else 'call (not recorded)'} -> {d}")
     if ctx:
         (d / "call_meta.json").write_text(json.dumps({"caller": caller, "context": ctx["path"]}))
 
@@ -189,10 +199,18 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         log("speaking greeting")
         play_wav(greeting)
 
-    gone = 0
+    gone = n = 0
     dumped = clicked = False
+    recorded = bool(recs)
     while time.time() - t0 < max_secs:  # record until hang-up (call UI + Chrome mic both gone for 3 s)
-        if not dumped:  # keep a copy of the in-call UI for selector debugging (local, git-ignored)
+        n += 1
+        if recs and n % 20 == 0 and diskguard.low(CALLS):  # ~every 10 s
+            log(f"WARNING disk: free space fell to {diskguard.free_gb(CALLS):.1f} GB - stopping the recording "
+                "(call continues)")
+            for r in recs:
+                stop_rec(r)
+            recs = []
+        if not dumped and not diskguard.low(HERE):  # in-call UI copy for selector debugging (local, git-ignored)
             try:
                 (HERE / "call_ui_incall.html").write_text(page.content()); dumped = True
             except Exception:
@@ -215,6 +233,10 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         stop_rec(r)
     dur = time.time() - t0
     log(f"call ended after {dur:.0f}s")
+    if not recorded or diskguard.low(CALLS):
+        log("disk: skipping stereo/mp3/offline transcript (no recording or low space); live transcript: "
+            f"{d / 'transcript_live.txt'}")
+        return
 
     # stereo file: L = AI (what we sent), R = caller (what we received); plus a mono mp3 to listen to
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(ai_wav), "-i", str(caller_wav),
@@ -274,7 +296,8 @@ def main():
                     continue
                 if r.get("ringing") and not warned:
                     log("page says 'incoming call' but no Accept button matched - dumping UI")
-                    (HERE / f"call_ui_{time.strftime('%H%M%S')}.html").write_text(p.content())
+                    if not diskguard.low(HERE):  # one file, overwritten (was call_ui_<time>.html, ~2 MB each)
+                        (HERE / "call_ui_ringing.html").write_text(p.content())
                     warned = True
                 only = os.environ.get("ANSWER_ONLY", "").strip()  # optional: answer only callers whose name contains this
                 if r.get("found") and only and only.lower() not in r.get("text", "").lower():

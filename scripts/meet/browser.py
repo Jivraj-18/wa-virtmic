@@ -102,13 +102,17 @@ def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False,
         cmd += ["--headless=new", "--use-fake-ui-for-media-stream"]
     # e.g. CHROME_EXTRA_ARGS="--no-sandbox" under proot-distro on Termux (see launch_chrome.sh); no-op elsewhere.
     cmd += os.environ.get("CHROME_EXTRA_ARGS", "").split()
-    proc = subprocess.Popen(cmd + [url], env=env, stdout=open(profile / "chrome.log", "a"),
-                            stderr=subprocess.STDOUT, start_new_session=True)
+    # Chrome's stderr is discarded: nothing reads it, and an unbounded chrome.log once filled a phone (50 GB).
+    # To debug a Chrome that won't start, run the printed command by hand.
+    cmd.append("--log-level=3")
+    (profile / "chrome.log").unlink(missing_ok=True)  # old unbounded log location
+    proc = subprocess.Popen(cmd + [url], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
     for _ in range(60):
         if cdp_up(port):
             return proc
         time.sleep(0.5)
-    raise RuntimeError(f"Maya Chrome did not open CDP on :{port} (see {profile}/chrome.log)")
+    raise RuntimeError(f"Maya Chrome did not open CDP on :{port}; run it by hand to see why: {' '.join(cmd + [url])}")
 
 
 def chrome_pids(port=PORT):

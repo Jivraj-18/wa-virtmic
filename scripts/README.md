@@ -62,6 +62,11 @@ should print AUDIO PRESENT), `bash scripts/launch_chrome.sh`, `python3 scripts/c
 `--mode greeting` plays the fixed greeting instead of the live agent). Manual alternative to auto-answer: answer in noVNC Chrome,
 click Allow, then run `bash scripts/call_check.sh`.
 
+Storage (phones have little): Chrome's output is discarded by default. `CHROME_LOG=/tmp/chrome.log bash scripts/launch_chrome.sh`
+keeps ERROR-level lines, capped at 5 MB (`CHROME_LOG_MAX_BYTES`), for debugging a Chrome that won't start. A call records
+about 23 MB per minute. `scripts/calls/` is pruned oldest-first to `CALLS_MAX_MB` (default 1000) before each call, and below
+`DISK_MIN_FREE_GB` free (default 2) calls are answered but not recorded. `python3 scripts/diskguard.py` shows both.
+
 ## Verified results
 
 - Step 3 (tone → virtmic): RMS 2762.6 (−21.5 dBFS), AUDIO PRESENT. Silence control: RMS 0.

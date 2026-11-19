@@ -116,7 +116,7 @@ else bad "noVNC is not listening on :6080 -> run: /usr/local/share/desktop-init.
 step "5/6 Chrome with WhatsApp Web (CDP :9222)"
 if cdp_up; then ok "Chrome already running ($(curl -s localhost:9222/json/version | sed -n 's/.*"Browser": "\(.*\)".*/\1/p'))"
 elif [ $DRY = 1 ]; then would "bash scripts/launch_chrome.sh   (headed Chrome on :1, profile ~/.config/wa-chrome-profile)"
-else bash "$S/launch_chrome.sh" | tail -1; cdp_up && ok "Chrome started" || { bad "Chrome did not start: see ~/.config/wa-chrome-profile/chrome.log"; exit 1; }; fi
+else bash "$S/launch_chrome.sh" | tail -1; cdp_up && ok "Chrome started" || { bad "Chrome did not start: rerun with CHROME_LOG=/tmp/chrome.log bash scripts/launch_chrome.sh and read that (capped at 5 MB)"; exit 1; }; fi
 
 step "6/6 Call auto-answer + AI voice agent (auto_answer.py)"
 running=$(aa_pids | tr '\n' ' ')
