@@ -18,9 +18,9 @@
   .sub { color: var(--muted); margin: 0 0 16px; }
   nav a { color: var(--accent); text-decoration: none; margin-right: 16px; font-size: 15px; }
   .diagram { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
-  .diagram pre.mermaid { margin: 0; background: transparent; text-align: center; }
   ul.notes { margin: 12px 0 0; padding-left: 20px; }
   ul.notes li { margin: 4px 0; }
+  ol.steps { padding-left: 22px; } ol.steps li { margin: 8px 0; }
   table { width: 100%; border-collapse: collapse; font-size: 15px; margin-top: 8px; }
   th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; }
@@ -37,123 +37,37 @@
   <p class="lead">Everything runs in one GitHub Codespace. A real Chrome browser joins the call, virtual audio devices act as its
     microphone and speaker, and a realtime voice model listens and talks through them. No WhatsApp Business account and no phone
     number provider are needed.</p>
-  <nav><a href="#core">1. The core</a><a href="#call">2. Answering a WhatsApp call</a><a href="#meet">3. Maya on Google Meet</a><a href="#experiments">4. What each experiment added</a></nav>
+  <nav><a href="#diagram">The diagram</a><a href="#steps">The 8 steps in words</a><a href="#maya">Maya on Meet</a><a href="#experiments">What each experiment added</a></nav>
 
-  <!-- ============================================================ 1 -->
-  <h2 id="core">1. The core: how an AI gets onto a call</h2>
-  <p class="sub">Each arrow is labelled with how the two parts talk to each other.</p>
-  <div class="diagram"><pre class="mermaid">
-flowchart TB
-  phone["📱 Caller's phone<br/>(normal WhatsApp)"]
+  <h2 id="diagram">The whole system on one page</h2>
+  <p class="sub">Three areas, left to right: the people on the call, our Codespace, and the cloud AI services. Follow the numbers.
+    Line colours show the kind of connection. <a href="architecture.svg">Open full size</a> ·
+    <a href="architecture.drawio">draw.io source</a> (open it in draw.io / diagrams.net to edit).</p>
+  <a href="architecture.svg"><img src="architecture.svg" alt="Architecture diagram: caller's phone, Chrome with WhatsApp Web and Meet tabs, Playwright, PulseAudio fake mic and speaker, voice bridge, company LLM gateway for a temporary key, and a direct WebSocket to OpenAI Realtime" style="width:100%;border:1px solid var(--line);border-radius:10px;background:#fff"></a>
 
-  subgraph CS["GitHub Codespace (Linux container)"]
-    direction LR
-    you["🖥️ noVNC desktop<br/>you watch, scan the QR code"]
-    chrome["Chrome (headed, not headless)<br/>web.whatsapp.com or meet.google.com"]
-    pw["Python + Playwright<br/>auto_answer.py / maya.py<br/>watches the page, clicks buttons"]
-    subgraph PA["PulseAudio virtual audio"]
-      direction TB
-      micsink["virtmic_sink"] --> mic["virtmic<br/>= Chrome's microphone"]
-      spk["callout_sink<br/>= Chrome's speaker"]
-    end
-    agent["realtime_agent.py<br/>streams audio both ways"]
-  end
+  <h2 id="steps">The 8 steps in plain words</h2>
+  <ol class="steps">
+    <li><b>Someone calls</b> our WhatsApp number from a normal phone. The call arrives in a <b>real Chrome window</b> running WhatsApp Web inside the Codespace (WebRTC, end-to-end encrypted; we never touch that traffic).</li>
+    <li><b>Playwright spots the call and answers.</b> It looks at the WhatsApp page every 0.5 s, the way a person would, for an "Accept" button, and clicks it. It talks to Chrome over CDP (Chrome DevTools Protocol), a local connection inside the Codespace.</li>
+    <li><b>Chrome plays the call into a fake speaker.</b> PulseAudio gives Chrome a pretend speaker (<code>callout_sink</code>) and a pretend microphone (<code>virtmic</code>).</li>
+    <li><b>The voice bridge picks up the caller's voice</b> from the fake speaker as raw audio, and records it.</li>
+    <li><b>It asks the company LLM gateway for a temporary OpenAI key.</b> This is one ordinary HTTPS request at the start of each call. The gateway can't carry a WebSocket, so this key is the only thing it provides.</li>
+    <li><b>It opens a WebSocket directly to OpenAI</b> (<code>wss://api.openai.com</code>, model <code>gpt-realtime</code>) using that key. <b>This connection does not go through the gateway.</b> The caller's audio streams up and the AI's voice streams back down, live, for the whole call.</li>
+    <li><b>The AI's voice goes into the fake microphone.</b> If the caller starts talking over the AI, the bridge cuts the AI off.</li>
+    <li><b>Chrome sends the fake-mic audio into the call</b>, so the caller hears the AI. The reply starts about 1.3 s after the caller stops talking. When the call ends, both sides and a transcript are saved, and a summary is written by <code>gpt-4.1-mini</code> through the gateway (plain HTTPS).</li>
+  </ol>
 
-  subgraph CLOUD["Cloud APIs"]
-    gw["OpenAI-compatible<br/>LLM gateway"]
-    rt["OpenAI Realtime<br/>gpt-realtime<br/>(hears + speaks, no separate STT/TTS)"]
-  end
-
-  phone <-- "WhatsApp call<br/>(WebRTC, end-to-end encrypted)" --> chrome
-  you -. "VNC over HTTPS (port 6080)" .-> chrome
-  pw <-- "CDP (Chrome DevTools Protocol)<br/>WebSocket on localhost:9222" --> chrome
-  mic -- "mic input" --> chrome
-  chrome -- "call audio out" --> spk
-  spk -- "parec (raw PCM 24 kHz)" --> agent
-  agent -- "pacat (raw PCM 24 kHz)" --> micsink
-  agent -- "1. HTTPS POST<br/>get a short-lived key" --> gw
-  agent <-- "2. WebSocket (wss)<br/>audio chunks + events" --> rt
-  </pre></div>
+  <h2 id="maya">Maya on Google Meet: what's different</h2>
   <ul class="notes">
-    <li><b>Why a real browser:</b> WhatsApp and Meet have no API for an outside program to join a call. Chrome joins like a person would; Playwright drives it.</li>
-    <li><b>Why virtual audio:</b> Chrome thinks <code>virtmic</code> is a microphone. Whatever the agent plays into <code>virtmic_sink</code>, the other person hears. Whatever they say comes out on <code>callout_sink</code>, where the agent records it.</li>
-    <li><b>Why two cloud steps:</b> the gateway can't forward WebSockets. So the agent asks it for a short-lived OpenAI key over plain HTTPS, then opens the WebSocket straight to OpenAI.</li>
-    <li><b>Speed:</b> about 1.2–1.4 s from the caller going quiet to the AI's first word. Half a second of that is waiting to be sure the caller has finished.</li>
-  </ul>
-
-  <!-- ============================================================ 2 -->
-  <h2 id="call">2. Answering a WhatsApp call, step by step</h2>
-  <p class="sub">We never read WhatsApp's network traffic (it is encrypted). A call is detected the way a person would notice it: the Accept button appears on screen.</p>
-  <div class="diagram"><pre class="mermaid">
-sequenceDiagram
-  autonumber
-  participant C as Caller (phone)
-  participant W as WhatsApp Web (Chrome)
-  participant A as auto_answer.py (Playwright)
-  participant P as PulseAudio
-  participant R as realtime_agent.py
-  participant O as OpenAI gpt-realtime
-
-  A->>W: On start: grant mic permission (CDP)
-  loop every 0.5 s
-    A->>W: Is there an "Accept" button? (reads the page)
-  end
-  C->>W: Voice call rings
-  A->>W: Click "Accept"
-  A->>P: Move Chrome's mic to virtmic, speaker to callout_sink
-  A->>R: Start agent + recording
-  R->>O: HTTPS: get key, then open WebSocket
-  R->>C: Greeting (spoken through virtmic)
-  loop conversation
-    C->>R: Caller speaks (callout_sink → audio chunks to OpenAI)
-    O->>R: Reply audio streams back (~1.3 s after the caller stops)
-    R->>C: Played into virtmic
-    Note over C,O: If the caller talks over the AI, playback is cut (barge-in)
-  end
-  C->>W: Hangs up
-  A->>A: "End call" button gone → stop recording
-  A->>A: Save both sides, transcript, and summary.md
-  </pre></div>
-  <ul class="notes">
-    <li><b>Detecting calls:</b> Playwright attaches to the already-open Chrome over CDP. It checks the page every half second for a button labelled Accept or Answer, and for the call-controls bar while a call is live.</li>
-    <li><b>Recording:</b> each call folder has <code>caller.wav</code>, <code>ai.wav</code>, a stereo mix and a timestamped transcript. Recordings stay in the Codespace and are never committed.</li>
-    <li><b>Call-center mode (E1):</b> before each call the agent's instructions are rebuilt from a folder you edit: <code>instructions.md</code>, <code>config.yaml</code> and <code>knowledge/</code>.</li>
-  </ul>
-
-  <!-- ============================================================ 3 -->
-  <h2 id="meet">3. Maya on Google Meet</h2>
-  <p class="sub">The same core, pointed at a Meet tab. The difference is that Maya listens to everything but only speaks when someone says her name.</p>
-  <div class="diagram"><pre class="mermaid">
-flowchart TB
-  subgraph MEET["meet.google.com in Maya's own Chrome (signed-in Google account)"]
-    audio["Meeting audio"]
-    cap["Live captions<br/>(who said what)"]
-    chat["Meeting chat"]
-  end
-
-  join["Playwright joins:<br/>camera off, mic on,<br/>clicks Join, turns on captions"] --> MEET
-
-  audio -- "PulseAudio → WebSocket" --> rt["gpt-realtime<br/>hears everything,<br/>auto-reply turned OFF"]
-  cap -- "page read every ~1.5 s<br/>sent as text" --> rt
-  chat -- "page read<br/>sent as text" --> rt
-
-  rt -- "running transcript" --> addr{"addressing.py<br/>Was Maya named?<br/>('Maya, …', 'Hi Maya')"}
-  addr -- "yes" --> speak["Ask the model to reply<br/>→ voice into virtmic"]
-  addr -- "no" --> silent["Stay silent"]
-  speak --> vad{"Someone talks<br/>over her?"}
-  vad -- "yes: stop in 0.1–0.3 s<br/>(local voice detector)" --> silent
-
-  rt -. "meeting so far" .-> sug["suggester.py<br/>gpt-4.1-mini over HTTPS<br/>every few minutes"]
-  sug -- "short tip typed<br/>into Meet chat" --> chat
-  </pre></div>
-  <ul class="notes">
-    <li><b>Joining:</b> Meet refuses guests from a cloud machine ("checks you're not a bot"), so Maya uses a separate Google account, logged in once by hand in noVNC.</li>
-    <li><b>Who is speaking:</b> Maya doesn't recognise voices. She reads Meet's own captions, which label each line with the speaker's name.</li>
-    <li><b>Real test (2 people + Maya):</b> she stayed quiet when only mentioned ("I agree with what Maya said"), answered every direct question, continued when asked, and posted chat tips that people noticed.</li>
+    <li><b>Same pipes:</b> Chrome opens a Meet tab instead of WhatsApp, with the same fake mic and speaker and the same direct WebSocket to <code>gpt-realtime</code>.</li>
+    <li><b>Joining:</b> Playwright clicks Join and turns on captions. Meet refuses guests from a cloud machine, so Maya uses her own Google account, signed in once by hand.</li>
+    <li><b>Only speaks when named:</b> the model hears everything, but its auto-reply is switched off. Our code replies only when someone says "Maya, …", and stops her within about 0.2 s if someone talks over her.</li>
+    <li><b>Knows who said what:</b> Playwright reads Meet's captions (which carry speaker names) and the chat every 1.5 s, and passes them to the model as text.</li>
+    <li><b>Chat tips:</b> every few minutes <code>gpt-4.1-mini</code> (via the gateway, HTTPS) suggests a short tip, and Playwright types it into the Meet chat.</li>
   </ul>
 
   <!-- ============================================================ 4 -->
-  <h2 id="experiments">4. What each experiment added on top of the core</h2>
+  <h2 id="experiments">What each experiment added</h2>
   <table>
     <thead><tr><th>#</th><th>What it adds</th><th>How it works</th><th>Models / protocol</th><th>Status</th></tr></thead>
     <tbody>
@@ -170,7 +84,7 @@ flowchart TB
         <td>Same E0 scripts against several voice backends</td>
         <td>Planned: newer gpt-realtime, Gemini Live, HTTP-only fallback</td><td><span class="tag todo">Not started</span></td></tr>
       <tr><td>E4</td><td>Maya, a Google Meet participant</td>
-        <td>See diagram 3</td>
+        <td>See "Maya on Google Meet" above</td>
         <td>gpt-realtime; gpt-4.1-mini for chat tips</td><td><span class="tag partial">Real Meet tested</span></td></tr>
       <tr><td>E5</td><td>Plays audio on request: files or a generated podcast</td>
         <td>A pausable player writes into the same virtual mic. It pauses when the caller speaks. Podcast scripts are written and voiced line by line</td>
@@ -184,11 +98,5 @@ flowchart TB
     <a href="https://github.com/Jivraj-18/wa-virtmic">repository</a>.</p>
 </main>
 
-<script type="module">
-  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "default", securityLevel: "strict",
-    flowchart: { htmlLabels: true, curve: "basis" }, sequence: { mirrorActors: false } });
-</script>
 </body>
 </html>
