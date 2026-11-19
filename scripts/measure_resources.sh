@@ -54,7 +54,7 @@ set +e
   echo
   echo "## proot-distro rootfs(es) (only visible from Termux's own shell, not from inside a distro login)"
   found=0
-  for d in "${PREFIX:-}"/var/lib/proot-distro/installed-rootfs/*; do
+  for d in "${PREFIX:-}"/var/lib/proot-distro/containers/*/rootfs; do
     [ -d "$d" ] && { du -sh "$d" 2>/dev/null; found=1; }
   done
   [ "$found" = 1 ] || echo "(none installed yet)"
