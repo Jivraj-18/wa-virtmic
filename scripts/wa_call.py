@@ -38,6 +38,31 @@ def wa_page(browser):
     raise SystemExit("no web.whatsapp.com tab found (is Chrome running? bash scripts/launch_chrome.sh)")
 
 
+def resolve(page, who: str, lookup_only=False):
+    """'Name substring' or digits -> (number, name). Prints candidates and returns None if ambiguous/not found
+    (or always, with lookup_only)."""
+    digits = re.sub(r"\D", "", who)
+    if len(digits) >= 10 and len(digits) == len(re.sub(r"[\s+\-()]", "", who)):
+        return digits, who
+    hits = page.evaluate(LOOKUP_JS, who)
+    saved = [h for h in hits if h["saved"]] or hits
+    if lookup_only or len(saved) != 1:
+        for h in hits:
+            print(f"{h['num']}  {h['name']}{'' if h['saved'] else '  (not in address book)'}")
+        if not lookup_only:
+            print(f"\n{len(saved)} saved matches for {who!r} - be more specific, or pass the number.")
+        return None
+    return saved[0]["num"], saved[0]["name"]
+
+
+def open_chat(page, num: str, text: str = ""):
+    """Open the chat with web.whatsapp.com/send?phone= (WhatsApp Web reloads; slow on a phone)."""
+    from urllib.parse import quote
+    page.goto(f"https://web.whatsapp.com/send?phone={num}" + (f"&text={quote(text)}" if text else ""),
+              wait_until="domcontentloaded")
+    page.locator("#main header").first.wait_for(timeout=120000)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("who", help="contact name substring, or a phone number with country code")
@@ -52,20 +77,11 @@ def main():
         b = pw.chromium.connect_over_cdp("http://localhost:9222")
         page = wa_page(b)
         page.set_default_timeout(30000)
-        digits = re.sub(r"\D", "", a.who)
-        if len(digits) >= 10 and len(digits) == len(re.sub(r"[\s+\-()]", "", a.who)):
-            num, name = digits, a.who
-        else:
-            hits = page.evaluate(LOOKUP_JS, a.who)
-            saved = [h for h in hits if h["saved"]] or hits
-            if a.lookup or len(saved) != 1:
-                for h in hits:
-                    print(f"{h['num']}  {h['name']}{'' if h['saved'] else '  (not in address book)'}")
-                if not a.lookup:
-                    print(f"\n{len(saved)} saved matches for {a.who!r} - be more specific, or pass the number.")
-                return 0 if a.lookup else 2
-            num, name = saved[0]["num"], saved[0]["name"]
-        if a.lookup:
+        r = resolve(page, a.who, lookup_only=a.lookup)
+        if r is None:
+            return 0 if a.lookup else 2
+        num, name = r
+        if a.lookup:  # a plain number was given
             print(num, name)
             return 0
 
@@ -74,7 +90,7 @@ def main():
         b.new_browser_cdp_session().send("Browser.grantPermissions",
                                          {"origin": aa.ORIGIN, "permissions": ["audioCapture"]})
         aa.log(f"opening chat for {name} (+{num})")
-        page.goto(f"https://web.whatsapp.com/send?phone={num}", wait_until="domcontentloaded")
+        open_chat(page, num)
         btn = page.locator('#main header [aria-label="Voice call"]').first
         btn.wait_for(timeout=90000)  # WhatsApp Web reloads; on a phone this takes a while
         btn.click()
