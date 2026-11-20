@@ -69,11 +69,10 @@ fi
 echo $$ >"$PIDFILE"
 alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" 2>/dev/null
 pkill -f "^$PY -u $S/auto_answer.py" 2>/dev/null
-pkill -f '^/usr/lib/chromium/chromium' 2>/dev/null
 pkill -f "^$XVFB_HOME/usr/bin/Xvfb.patched $WA_DISPLAY" 2>/dev/null
 pulseaudio --kill 2>/dev/null
 sleep 3
-pkill -9 -f '^/usr/lib/chromium/chromium' 2>/dev/null; rm -f "$AA_PIDFILE"
+rm -f "$AA_PIDFILE"
 # remove the pid file only if it is still ours (a newer supervisor may have taken over and rewritten it)
 trap 'log "supervisor $$ exiting"; [ "$(cat "$PIDFILE" 2>/dev/null)" = $$ ] && rm -f "$PIDFILE"; exit 0' TERM INT
 log "supervisor started (pid $$, display $WA_DISPLAY, engine ${VOICE_ENGINE:-live})"
@@ -106,6 +105,13 @@ ensure_x() {
   log "ERROR: Xvfb did not come up"; return 1
 }
 
+stop_chrome() { # graceful: a quick kill -9 can cut WhatsApp off mid-write to its login data and log it out
+  local p; p=$(chrome_pids); [ -z "$p" ] && return 0
+  kill $p 2>/dev/null
+  for _ in $(seq 30); do [ -z "$(chrome_pids)" ] && return 0; sleep 1; done
+  log "Chrome ignored SIGTERM for 30s - killing"; p=$(chrome_pids); [ -n "$p" ] && kill -9 $p 2>/dev/null; sleep 1
+}
+
 kill_aa() {
   alive "$AA_PIDFILE" && { kill "$(cat "$AA_PIDFILE")"; sleep 2; kill -9 "$(cat "$AA_PIDFILE")" 2>/dev/null; }
   pkill -9 -f "^$PY -u $S/auto_answer.py" 2>/dev/null; rm -f "$AA_PIDFILE"
@@ -114,7 +120,7 @@ kill_aa() {
 restart_chrome() {
   log "restarting Chrome ($*)"
   kill_aa
-  local p; p=$(chrome_pids); [ -n "$p" ] && { kill $p 2>/dev/null; sleep 3; p=$(chrome_pids); [ -n "$p" ] && kill -9 $p 2>/dev/null; sleep 1; }
+  stop_chrome
   rm -f "$PROFILE/SingletonLock" "$PROFILE/SingletonCookie" "$PROFILE/SingletonSocket"
   DISPLAY=$WA_DISPLAY timeout 60 bash "$S/launch_chrome.sh" >/dev/null 2>&1
   cdp_ok && log "Chrome up on $WA_DISPLAY" || log "ERROR: Chrome did not come up"
