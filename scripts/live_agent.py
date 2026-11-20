@@ -153,7 +153,18 @@ class LiveAgent:
             if track.kind == "audio":
                 tasks.append(asyncio.ensure_future(play(track)))
 
-        await pc.setLocalDescription(await pc.createOffer())
+        # ICE gathering waits for a STUN reply on every local interface; on the phone one never answers and aioice
+        # retried for ~5 s (RTO 0.5 s x 6) - heard by callers as silence after we picked up. Short retries ONLY while
+        # gathering (1.5 s, same candidates incl. server-reflexive), then the normal values for connectivity checks.
+        import aioice.stun as aistun
+        saved = aistun.RETRY_MAX, aistun.RETRY_RTO
+        aistun.RETRY_MAX, aistun.RETRY_RTO = 2, 0.2
+        try:
+            t_ice = time.time()
+            await pc.setLocalDescription(await pc.createOffer())
+        finally:
+            aistun.RETRY_MAX, aistun.RETRY_RTO = saved
+        self.log(f"live: ICE gathered in {time.time() - t_ice:.1f}s")
         body = {"session": {"model": MODEL, "instructions": self.instructions, "audio": {"output": {"voice": VOICE}}},
                 "transport": {"type": "webrtc", "sdp": pc.localDescription.sdp}}
         t_post = time.time()

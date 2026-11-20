@@ -127,6 +127,46 @@ def call_active(page) -> bool:
     return ui or bool(client_streams("source-outputs"))
 
 
+DEAD_AIR_SECS = float(os.environ.get("DEAD_AIR_SECS", "30"))
+
+
+class CallerSilence:
+    """Seconds since the caller side last carried ANY signal. A live WhatsApp call always has some noise; exact
+    digital zero means the remote side is gone. Real calls showed up to 12 s of zeros mid-call (silence
+    suppression), so the default limit is 30 s. Backstop for when WhatsApp Web's call UI / mic stream lingers after
+    the other side hangs up (happened: a 27 s call was held "active" for 6 min, blocking new calls)."""
+
+    def __init__(self, device="callout_sink.monitor"):
+        self.last = time.time()
+        self.p = subprocess.Popen(["parec", f"--device={device}", "--raw", "--format=s16le", "--rate=8000",
+                                  "--channels=1", "--latency-msec=100"], stdout=subprocess.PIPE)
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        import array
+        while True:
+            b = self.p.stdout.read(800)  # 50 ms
+            if not b:
+                return
+            if any(array.array("h", b[: len(b) // 2 * 2])):
+                self.last = time.time()
+
+    def silent_for(self) -> float:
+        return time.time() - self.last
+
+    def stop(self):
+        self.p.kill()
+
+
+def route_when_ready():
+    for _ in range(40):  # wait up to 20 s for Chrome to open its mic (= media flowing)
+        if client_streams("source-outputs"):
+            break
+        time.sleep(0.5)
+    if not fix_routing():
+        log("WARNING: Chrome has no mic stream - call may not have connected")
+
+
 def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", context: str | None = None,
                 caller: str | None = None, speak_first: bool = True, extra_instructions: str = "",
                 engine: str | None = None):
@@ -160,14 +200,6 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
     if ctx:
         (d / "call_meta.json").write_text(json.dumps({"caller": caller, "context": ctx["path"]}))
 
-    for _ in range(40):  # wait up to 20 s for Chrome to open its mic (= media flowing)
-        if client_streams("source-outputs"):
-            break
-        time.sleep(0.5)
-    if not fix_routing():
-        log("WARNING: Chrome has no mic stream - call may not have connected")
-
-    time.sleep(1.0)
     agent = th = None
     hangup = threading.Event()
     # The SCRIPT decides when to hang up (hangup.py watches the transcript); the AI only has to say goodbye.
@@ -207,16 +239,21 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             agent = AgentCls(transcript=d / "transcript_live.txt", log=log, on_line=watcher.feed,
                           instructions=INSTRUCTIONS + hang + extra_instructions, **kw)
         th = agent.start_thread(max_secs)
+        # Mic wait + stream routing now run WHILE the agent connects (ICE + session setup take seconds); before,
+        # they ran first and the caller heard ~15 s of silence after we picked up.
+        route_when_ready()
         th.join(10)  # the thread only exits early if the realtime session failed
         if not th.is_alive():
             log("realtime agent did not start - falling back to the greeting")
             agent = th = None
     if not th:
+        route_when_ready()
         log("speaking greeting")
         play_wav(greeting)
 
     gone = n = 0
     dumped = clicked = False
+    silence = CallerSilence()
     recorded = bool(recs)
     while time.time() - t0 < max_secs:  # record until hang-up (call UI + Chrome mic both gone for 3 s)
         n += 1
@@ -242,7 +279,16 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         gone = 0 if call_active(page) else gone + 1
         if gone >= 6:
             break
+        if silence.silent_for() > DEAD_AIR_SECS:
+            try:
+                how = page.evaluate(END_CALL_JS)
+            except Exception as e:
+                how = f"error {e}"
+            log(f"caller audio has been digital silence for {DEAD_AIR_SECS:g}s - treating the call as over "
+                f"(end call: {how})")
+            break
         page.wait_for_timeout(500)
+    silence.stop()
     if agent:
         agent.stop.set()
         th.join(5)
@@ -318,6 +364,10 @@ def main():
         sys.exit(4)
 
     subprocess.run([str(HERE / "audio_setup.sh")], stdout=subprocess.DEVNULL, check=True)
+    if os.environ.get("VOICE_ENGINE", "realtime") == "live":
+        t = time.time()
+        import live_agent, aiortc, av  # noqa: F401  ~8 s on the phone: do it now, not after accepting a call
+        log(f"live engine libraries preloaded in {time.time() - t:.1f}s")
     greeting_wav = str(HERE / "greeting.wav")
     t = time.time()
     synth_wav(a.greeting, greeting_wav)
