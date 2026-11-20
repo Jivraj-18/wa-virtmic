@@ -45,6 +45,7 @@ case "${1:-start}" in
   stop)
     alive "$PIDFILE" && kill "$(cat "$PIDFILE")" && echo "supervisor stopped"
     alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" && echo "auto_answer.py stopped"
+    pkill -f "^$PY -u $S/auto_answer.py" && echo "stray auto_answer.py stopped"
     rm -f "$PIDFILE" "$AA_PIDFILE"; exit 0 ;;
   status)
     alive "$PIDFILE" && echo "supervisor: running (pid $(cat "$PIDFILE"))" || echo "supervisor: NOT running"
@@ -67,12 +68,14 @@ if alive "$PIDFILE" && [ "$(cat "$PIDFILE")" != $$ ]; then
 fi
 echo $$ >"$PIDFILE"
 alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" 2>/dev/null
+pkill -f "^$PY -u $S/auto_answer.py" 2>/dev/null
 pkill -f '^/usr/lib/chromium/chromium' 2>/dev/null
 pkill -f "^$XVFB_HOME/usr/bin/Xvfb.patched $WA_DISPLAY" 2>/dev/null
 pulseaudio --kill 2>/dev/null
 sleep 3
 pkill -9 -f '^/usr/lib/chromium/chromium' 2>/dev/null; rm -f "$AA_PIDFILE"
-trap 'log "supervisor exiting"; rm -f "$PIDFILE"; exit 0' TERM INT
+# remove the pid file only if it is still ours (a newer supervisor may have taken over and rewritten it)
+trap 'log "supervisor $$ exiting"; [ "$(cat "$PIDFILE" 2>/dev/null)" = $$ ] && rm -f "$PIDFILE"; exit 0' TERM INT
 log "supervisor started (pid $$, display $WA_DISPLAY, engine ${VOICE_ENGINE:-live})"
 [ -x /data/data/com.termux/files/usr/bin/termux-wake-lock ] && \
   /data/data/com.termux/files/usr/bin/termux-wake-lock >/dev/null 2>&1 && log "termux wake lock requested"
@@ -103,7 +106,10 @@ ensure_x() {
   log "ERROR: Xvfb did not come up"; return 1
 }
 
-kill_aa() { alive "$AA_PIDFILE" && { kill "$(cat "$AA_PIDFILE")"; sleep 2; kill -9 "$(cat "$AA_PIDFILE")" 2>/dev/null; }; rm -f "$AA_PIDFILE"; }
+kill_aa() {
+  alive "$AA_PIDFILE" && { kill "$(cat "$AA_PIDFILE")"; sleep 2; kill -9 "$(cat "$AA_PIDFILE")" 2>/dev/null; }
+  pkill -9 -f "^$PY -u $S/auto_answer.py" 2>/dev/null; rm -f "$AA_PIDFILE"
+}
 
 restart_chrome() {
   log "restarting Chrome ($*)"
@@ -122,7 +128,12 @@ wa_state() { # loaded | qr | loading | ? - WhatsApp Web's own state, via CDP
 start_aa() {
   cap "$AA_LOG" 5000000
   touch "$HEARTBEAT"
-  ( cd "$S/.." && setsid nohup "$PY" -u "$S/auto_answer.py" ${AA_ARGS:-} >>"$AA_LOG" 2>&1 </dev/null & echo $! >"$AA_PIDFILE" )
+  # no subshell/setsid: $! must be the python process itself (setsid forked, so the pid file held a wrapper and an
+  # orphaned answerer kept running next to its replacement - two AIs on one call)
+  pkill -f "^$PY -u $S/auto_answer.py" 2>/dev/null && { log "killed a stray auto_answer.py"; sleep 2; }
+  cd "$S/.."   # separate line: "cd && nohup ... &" would background a subshell and $! would be bash, not python
+  nohup "$PY" -u "$S/auto_answer.py" ${AA_ARGS:-} >>"$AA_LOG" 2>&1 </dev/null &
+  echo $! >"$AA_PIDFILE"
   log "auto_answer.py started (pid $(cat "$AA_PIDFILE"), engine $VOICE_ENGINE)"
 }
 

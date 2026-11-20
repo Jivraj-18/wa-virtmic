@@ -304,6 +304,19 @@ def main():
     ap.add_argument("--context", help="E1 call-center folder (see context.py); reloaded on every call")
     a = ap.parse_args()
 
+    # One answerer per machine: two would both click Accept and run two AIs talking over each other on one call
+    # (happened once when a supervisor lost track of an orphaned copy). The lock dies with the process.
+    import fcntl
+    lock_path = Path(os.environ.get("AA_LOCK", Path.home() / ".cache/wa-virtmic/auto_answer.lock"))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    global _lock_fd
+    _lock_fd = open(lock_path, "w")
+    try:
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log(f"another auto_answer.py already holds {lock_path} - exiting")
+        sys.exit(4)
+
     subprocess.run([str(HERE / "audio_setup.sh")], stdout=subprocess.DEVNULL, check=True)
     greeting_wav = str(HERE / "greeting.wav")
     t = time.time()
