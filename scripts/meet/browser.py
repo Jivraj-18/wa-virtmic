@@ -27,6 +27,9 @@ PROFILE = Path(os.environ.get("MAYA_PROFILE", str(Path.home() / ".config" / "may
 OUT_SINK, MIC_SINK, MIC_SOURCE = "maya_out", "maya_mic_sink", "maya_mic"
 FORBIDDEN = {"virtmic", "virtmic_sink", "callout_sink"}
 NAME = os.environ.get("MAYA_NAME", "Maya")
+# On the phone (Termux + proot) Chrome draws on the answer daemon's invisible Xvfb :99; in the Codespace on noVNC :1.
+DISPLAY = os.environ.get("MAYA_DISPLAY") or (":99" if Path("/tmp/.X11-unix/X99").exists() else ":1")
+IN_PROOT = "proot" in os.uname().release.lower()   # Chrome's sandbox crashes under proot's ptrace
 
 
 def _check_port(port):
@@ -82,7 +85,7 @@ def cdp_up(port=PORT) -> bool:
         return False
 
 
-def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False, display=":1", prefix="maya"):
+def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False, display=DISPLAY, prefix="maya"):
     """Start Maya's Chrome (or reuse it if already on `port`). Returns the Popen or None if it was running."""
     _check_port(port)
     if cdp_up(port):
@@ -101,7 +104,7 @@ def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False,
     if headless:
         cmd += ["--headless=new", "--use-fake-ui-for-media-stream"]
     # e.g. CHROME_EXTRA_ARGS="--no-sandbox" under proot-distro on Termux (see launch_chrome.sh); no-op elsewhere.
-    cmd += os.environ.get("CHROME_EXTRA_ARGS", "").split()
+    cmd += os.environ.get("CHROME_EXTRA_ARGS", "--no-sandbox" if IN_PROOT else "").split()
     # Chrome's stderr is discarded: nothing reads it, and an unbounded chrome.log once filled a phone (50 GB).
     # To debug a Chrome that won't start, run the printed command by hand.
     cmd.append("--log-level=3")
@@ -297,8 +300,9 @@ def _cmd_devices(a):
 def _cmd_login(a):
     devices_up()
     launch_chrome("https://accounts.google.com/", port=a.port)
-    print(f"Maya's Chrome is open on the noVNC desktop (profile {PROFILE}, CDP :{a.port}).\n"
-          "Log in with Maya's SEPARATE Google account there. The login is kept in that profile.")
+    print(f"Maya's Chrome is open on display {DISPLAY} (profile {PROFILE}, CDP :{a.port}).\n"
+          "Log in with Maya's SEPARATE Google account there. The login is kept in that profile.\n"
+          "On the phone :99 is invisible (Xvfb): skip this and join as a guest (the host admits Maya).")
 
 
 def load_previous_history(url, root, max_dirs=6):

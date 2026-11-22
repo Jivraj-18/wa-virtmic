@@ -231,8 +231,8 @@ class Maya:
             yes = await asyncio.to_thread(_is_followup, q, a, text, speaker)
         finally:
             self.classifying = False
-        self.live_caption = (0.0, "", "")   # (wall time, speaker, text) of the newest on-screen caption block
-        self.used_captions = set()          # caption texts already used for a decision (they stay on screen)
+        self.live_caption = (0.0, "", "")   # this caption is decided; don't let the next utterance reuse it
+        # (used_captions is NOT cleared here: captions stay on screen and must not trigger a second follow-up)
         self.event("followup_check", text=text, speaker=speaker, yes=yes, source=source)
         if yes and time.time() <= self.followup_until + 5:
             await self.trigger(f"fu-{time.time():.0f}", (f"{speaker}: " if speaker else "") + text, early=False)

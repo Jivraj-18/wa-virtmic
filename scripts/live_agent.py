@@ -27,6 +27,10 @@ MODEL = os.environ.get("LIVE_MODEL", "gpt-live-1")
 VOICE = os.environ.get("LIVE_VOICE", "marin")
 RATE = 48000                  # WebRTC/Opus native rate; avoids resampling on the way in
 FRAME = RATE // 50            # 20 ms
+# Playback buffer. 60 ms was too small on the phone: every hiccup of this Python loop (busy CPU, swap) became a
+# gap in the AI's voice - callers said it was "very cracky" (10-18 % of speech was cut-outs on GPT-Live calls).
+PLAY_LATENCY_MS = int(os.environ.get("LIVE_PLAY_LATENCY_MS", "250"))
+OUT_QUEUE_BYTES = int(os.environ.get("LIVE_OUT_QUEUE_BYTES", "8192"))   # ~85 ms at 48 kHz mono s16
 
 
 class LiveAgent:
@@ -84,6 +88,7 @@ class LiveAgent:
     async def run(self, max_seconds: float = 3600):
         import urllib.request
         import av
+        import numpy as np
         from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 
         agent = self
@@ -114,7 +119,29 @@ class LiveAgent:
             "--latency-msec=20", stdout=asyncio.subprocess.PIPE)
         pacat = await asyncio.create_subprocess_exec(
             "pacat", "--playback", f"--device={self.out_device}", "--raw", "--format=s16le", f"--rate={RATE}",
-            "--channels=1", "--latency-msec=60", stdin=asyncio.subprocess.PIPE)
+            "--channels=1", f"--latency-msec={PLAY_LATENCY_MS}", stdin=asyncio.subprocess.PIPE)
+        # Keep audio waiting for pacat SMALL. asyncio's write buffer (64 KB) + the pipe (64 KB) could hold ~1.4 s of
+        # the AI's voice: bench runs showed writes blocking 0.65-0.85 s = the pipe full = the caller hears the AI
+        # that much late ("you are lagging"), and skip-silence can't trim audio that already left aiortc's queue.
+        out_fd = None
+        try:
+            pacat.stdin.transport.set_write_buffer_limits(high=OUT_QUEUE_BYTES)
+            out_fd = pacat.stdin.transport.get_extra_info("pipe").fileno()
+            import fcntl
+            fcntl.fcntl(out_fd, 1031, OUT_QUEUE_BYTES)  # F_SETPIPE_SZ (rounded up to a page)
+        except Exception as e:
+            self.log(f"live: could not shrink the playback queue: {type(e).__name__}: {e}")
+
+        def out_queued_ms():
+            """Audio written but not yet taken by pacat (asyncio buffer + pipe), in ms."""
+            try:
+                import fcntl, termios, struct
+                n = pacat.stdin.transport.get_write_buffer_size()
+                if out_fd is not None:
+                    n += struct.unpack("i", fcntl.ioctl(out_fd, termios.FIONREAD, b"\0\0\0\0"))[0]
+                return n / (2 * RATE) * 1000
+            except Exception:
+                return -1
         pc = RTCPeerConnection()
         self.t_track0 = time.time()
         pc.addTrack(CallerTrack(parec))
@@ -131,22 +158,61 @@ class LiveAgent:
 
         async def play(track):
             rs = av.AudioResampler(format="s16", layout="mono", rate=RATE)
-            first = True
+            first, nfr, last_warn = True, 0, -500
+            # per-5 s diagnostics (crackle hunt): frames in, longest wait for a frame, longest write into pacat
+            w = {"n": 0, "rgap": 0.0, "wmax": 0.0, "drop": 0, "t": time.time(), "last": time.time(), "outq": 0.0}
             while not self.stop.is_set():
                 try:
                     fr = await track.recv()
                 except Exception:
                     break
+                nfr += 1
+                now = time.time()
+                w["n"] += 1; w["rgap"] = max(w["rgap"], now - w["last"]); w["last"] = now
+                if now - w["t"] >= 5:
+                    self.log(f"live: audio-in 5s: {w['n']} frames (250 = real time), longest wait {w['rgap']*1e3:.0f} ms, "
+                              f"longest pacat write {w['wmax']*1e3:.0f} ms, out-queue max {w['outq']:.0f} ms, silence skipped {w['drop']}, "
+                              f"queued {getattr(track, '_queue', None).qsize() if hasattr(track, '_queue') else '?'}, "
+                              f"loop lag {self._lag * 1e3:.0f} ms")
+                    w.update(n=0, rgap=0.0, wmax=0.0, drop=0, t=now, outq=0.0); self._lag = 0.0
+                if nfr == 1:
+                    self.log(f"live: first remote frame {time.time() - t_post:.2f}s after connect")
+                # GPT-Live streams 20 ms frames (silence too) from session start, into aiortc's UNBOUNDED queue, and
+                # pacat only takes them in real time. Any stall here (busy phone while WhatsApp dials) left a backlog
+                # that was never caught up: on a call to Sujal the AI's voice came 10 s after its text and he hung
+                # up. So skip queued SILENT frames while behind; speech is never dropped.
+                q = getattr(track, "_queue", None)
+                backlog = q.qsize() if q is not None else 0
+                if backlog >= 50 and nfr - last_warn > 500:
+                    last_warn = nfr
+                    self.log(f"live: AI audio {backlog * 0.02:.1f}s behind - dropping silence to catch up")
                 for out in rs.resample(fr):
                     pcm = bytes(out.planes[0])[: out.samples * 2]
+                    if backlog > 5 and int(np.abs(np.frombuffer(pcm, np.int16)).max(initial=0)) < 64:  # silent
+                        w["drop"] += 1
+                        continue
                     if first and any(pcm):
                         first = False
                         self.log(f"live: first AI audio {time.time() - t_post:.2f}s after connect")
                     try:
+                        t_w = time.time()
                         pacat.stdin.write(pcm)
                         await pacat.stdin.drain()
+                        w["wmax"] = max(w["wmax"], time.time() - t_w)
+                        w["outq"] = max(w["outq"], out_queued_ms())
                     except (BrokenPipeError, ConnectionResetError):
                         return
+
+        # How late this thread's event loop runs (max oversleep of a 20 ms timer per 5 s window). Large lag while the
+        # phone is NOT stalled = another thread of this process held Python's GIL (e.g. Playwright in handle_call).
+        self._lag = 0.0
+
+        async def lag_monitor():
+            while True:
+                t = time.time()
+                await asyncio.sleep(0.02)
+                self._lag = max(self._lag, time.time() - t - 0.02)
+        tasks.append(asyncio.ensure_future(lag_monitor()))
 
         @pc.on("track")
         def on_track(track):
@@ -177,8 +243,18 @@ class LiveAgent:
         self.log(f"live: ready {time.time() - t_post:.1f}s after POST")
 
         end = time.time() + max_seconds
+        t_stats = time.time()
         while not self.stop.is_set() and time.time() < end and pc.connectionState not in ("failed", "closed"):
             await asyncio.sleep(0.25)
+            if time.time() - t_stats >= 10:  # network side of the crackle hunt: packets lost / jitter from OpenAI
+                t_stats = time.time()
+                try:
+                    for st in (await pc.getStats()).values():
+                        if st.type == "inbound-rtp":
+                            self.log(f"live: rtp-in received {st.packetsReceived} lost {st.packetsLost} "
+                                     f"jitter {st.jitter}")
+                except Exception as e:
+                    self.log(f"live: getStats failed: {type(e).__name__}: {e}")
             for who in ("CALLER", "AI"):  # no explicit done event seen yet: flush a line after 1.2 s of quiet
                 if self._buf[who] and time.time() - self._last[who] > 1.2:
                     self._flush(who)

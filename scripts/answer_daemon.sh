@@ -38,7 +38,9 @@ cap() { # keep a log file under $2 bytes without breaking writers that hold it o
   [ -f "$f" ] && [ "$(stat -c %s "$f")" -gt "$max" ] || return 0
   tail -c $((max / 2)) "$f" >"$f.tmp" && cat "$f.tmp" >"$f"; rm -f "$f.tmp"
 }
-chrome_pids() { pgrep -f '^/usr/lib/chromium/chromium' ; }   # anchored: never matches our own shell
+# Only the WhatsApp Chrome (its profile): Maya's Meet Chrome (scripts/meet, own profile + CDP :9333) must survive
+# WhatsApp restarts and must not be mistaken for a running WhatsApp Chrome. Anchored: never matches our own shell.
+chrome_pids() { pgrep -f "^/usr/lib/chromium/chromium .*--user-data-dir=$PROFILE( |\$)" ; }
 cdp_ok() { curl -s -m 15 -o /dev/null localhost:9222/json/version; }
 
 case "${1:-start}" in

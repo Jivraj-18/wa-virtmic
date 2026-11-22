@@ -19,3 +19,4 @@ experiments/runs/
 # E1 call-center: the real context folder and runtime state stay local
 /callcenter/
 scripts/callcenter_state.json
+scripts/bench/

@@ -28,6 +28,7 @@ search the UI: contacts resolve from WhatsApp Web's own IndexedDB, chats open by
 - Group calls cannot be auto-answered; ask people to call one-to-one.
 
 ## Reviewing a call
+Call went badly (cracky voice, slow replies, didn't hang up)? Run `python3 scripts/call_diag.py` -> skill **wa-diag**.
 Each call has a folder `scripts/calls/<YYYYmmdd_HHMMSS>/` (latest: `ls -t scripts/calls | head -1`):
 - `transcript_live.txt` — what the AI and caller said, from the live session. Most reliable; read this first.
 - `transcript.txt` — offline transcription after the call. Garbles quiet or Hindi speech into other languages,

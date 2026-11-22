@@ -16,6 +16,7 @@ in `~/.local/opt/xvfb`, patched to find xkbcomp via the `/tmp/xkb` symlink) -> C
 | Exactly one answerer? | `ps -eo pid,args \| grep -E '^ *[0-9]+ python3 -u .*auto_answer'` (must be 1 line) |
 | Reload answerer code | `kill $(cat ~/.cache/wa-virtmic/auto_answer.pid)` — supervisor restarts it within ~20-40 s |
 | Logged in? | `python3 scripts/cdp_eval.py status` |
+| Was a call bad? | `python3 scripts/call_diag.py` (latest call; see skill **wa-diag**) |
 
 **Survives Claude exiting only if started from Termux**: proot-distro runs `--kill-on-exit`, so anything started
 from a proot shell (including this session) dies with it. The durable way: in a plain Termux session (not proot)

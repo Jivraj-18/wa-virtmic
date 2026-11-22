@@ -197,6 +197,12 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         recs = [start_rec("virtmic", ai_wav), start_rec("callout_sink.monitor", caller_wav)]
     t0 = time.time()
     log(f"{'recording' if recs else 'call (not recorded)'} -> {d}")
+    try:  # phone load during the call (CPU, swap, syscall latency) -> sysstats.jsonl, read by call_diag.py
+        from call_diag import Sampler
+        sampler = Sampler(d / "sysstats.jsonl").start()
+    except Exception as e:
+        sampler = None
+        log(f"sysstats sampler not started: {type(e).__name__}: {e}")
     if ctx:
         (d / "call_meta.json").write_text(json.dumps({"caller": caller, "context": ctx["path"]}))
 
@@ -294,8 +300,17 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         th.join(5)
     for r in recs:
         stop_rec(r)
+    if sampler:
+        sampler.close()
     dur = time.time() - t0
     log(f"call ended after {dur:.0f}s")
+    try:  # keep this call's log lines next to its recording (wa_call_<who>.log is overwritten by the next call)
+        import call_diag
+        _, lines = call_diag.find_log(d)
+        if lines:
+            (d / "call.log").write_text("\n".join(lines) + "\n")
+    except Exception as e:
+        log(f"call.log not saved: {type(e).__name__}: {e}")
     if not recorded or diskguard.low(CALLS):
         log("disk: skipping stereo/mp3/offline transcript (no recording or low space); live transcript: "
             f"{d / 'transcript_live.txt'}")
