@@ -27,6 +27,17 @@ search the UI: contacts resolve from WhatsApp Web's own IndexedDB, chats open by
 - "call ended" after ~20 s with no AI/CALLER lines = not answered. Check `wa_msg.py ... --read 3` — they often text back.
 - Group calls cannot be auto-answered; ask people to call one-to-one.
 
+## Call center (since 2026-11-24, branch termux-native)
+Every call (incoming and outgoing) has Claude Code as the voice AI's back office: GPT-Live delegates, Claude
+(`scripts/claude_tool.py`, one resumed `claude -p` session per call, web + desk only) works the desk
+`scripts/cc.py`, scoped to the person on the line: `who`, `chat`, `photo`, `send`, `remind`, `note`, `escalate`
+(WhatsApp to the owner's own chat, prefixed `[AI desk]`), `calls`, `transcript`, `status`. The voice model gets a
+caller card (name, past calls + summaries, notes, latest chat) at call start; after hang-up Claude wraps up (notes,
+promised messages, escalation, `summary` in call_meta.json). Per-person notes/reminders: `scripts/contacts/`
+(git-ignored); the supervisor sends due reminders (`cc.py due`). Desk actions of a call: `calls/<ts>/desk.log`.
+WhatsApp access during calls goes through `scripts/wa_store.py` (in-memory models, NO page reload - wa_msg.py's
+send?phone= reload would drop a live call). Turn off: LIVE_CLAUDE_TOOL=0.
+
 ## Reviewing a call
 Call went badly (cracky voice, slow replies, didn't hang up)? Run `python3 scripts/call_diag.py` -> skill **wa-diag**.
 Each call has a folder `scripts/calls/<YYYYmmdd_HHMMSS>/` (latest: `ls -t scripts/calls | head -1`):
