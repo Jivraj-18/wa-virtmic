@@ -99,7 +99,13 @@ start-up; repeated = bursty arrival).
   BUT the buffer flags hurt natively: Chrome "mic frames dropped" ~4 % on all 6 flagged runs vs 0.00-0.01 % without
   them (proot with flags: 0.4-2 %). Far-end dropout/lost % and Gemini stay noisy in BOTH variants (dropout 2-18 %,
   Gemini 3-8 on identical settings), so they don't separate variants yet. Suspect for the far-end noise: aiortc's
-  SCTP checksum falls back to pure-Python google-crc32c in Termux (far end = data-channel receiver).
+  SCTP checksum falls back to pure-Python google-crc32c in Termux (far end = data-channel receiver) - RULED OUT
+  (0.7 ms/packet, ~4 % of a core; data channel had 0 sequence gaps).
+  FOUND: the far-end loss is Chrome's mic APM (EC/NS/AGC), not the transport: `--no-apm` x3 native -> dropout 0 %,
+  lost 0 %, Gemini 10/10/10. Same-session proot baseline (6 runs, flags): APM on dropout 2-14 %, Gemini 6/8/6; APM off
+  dropout 0/0/1.3 %, Gemini 7/7/10, pacat write up to 106-161 ms, syscall worst 9-30 ms, proot ~30 % CPU avg.
+  Fix for live calls: scripts/mic_apm.py forces WhatsApp's getUserMedia to EC/NS/AGC off (init script, survives
+  reloads; checked in Chromium: getSettings() false/false/false after reload). Needs a real-call confirmation.
 - **Ruled out (tested, don't re-test)**: Python GIL / other threads (loop lag <= 75 ms during freezes); PulseAudio
   null sink running 2 s blocks (sink at 10 ms during freezes); opening new streams / resampling / pactl listings
   (no write blocking in an isolated test); Chrome consuming the mic (bench with and without: same); network (RTP loss
