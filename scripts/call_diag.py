@@ -51,7 +51,7 @@ def _groups():
         pid = int(p.name)
         if exe.endswith("/proot") or exe == "proot":
             g[pid] = "proot"
-        elif exe.startswith("/usr/lib/chromium/chromium"):
+        elif "/lib/chromium/chrom" in exe:   # Debian /usr/lib/chromium/chromium, Termux $PREFIX/lib/chromium/chrome
             g[pid] = "chrome_maya" if "maya-chrome-profile" in args else "chrome_wa"
         elif pid == me:
             g[pid] = "agent_py"

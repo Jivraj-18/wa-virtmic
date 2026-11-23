@@ -30,7 +30,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 BENCH = HERE / "bench"
 VOICES = BENCH / "voices"
-PORT = 9335
+PORT = int(os.environ.get("BENCH_CDP_PORT", "9335"))   # native Termux test stack: 9345 (proot uses 9335)
 MIC_RATE = 44100      # virtmic_sink's rate (--mic-rate)
 CHROME_EXTRA = ""     # extra Chrome flags (--chrome-args)
 LINES = ["Hello?",
@@ -153,7 +153,7 @@ def chrome_start(url, log, pulse_latency=None):
         cmd_extra = []
     if pulse_latency:
         env["PULSE_LATENCY_MSEC"] = str(pulse_latency)
-    cmd = [shutil.which("chromium") or "chromium", f"--user-data-dir={prof}", f"--remote-debugging-port={PORT}",
+    cmd = [shutil.which("chromium") or shutil.which("chromium-browser") or "chromium", f"--user-data-dir={prof}", f"--remote-debugging-port={PORT}",
            "--headless=new", "--no-first-run", "--use-fake-ui-for-media-stream",
            "--autoplay-policy=no-user-gesture-required", "--log-level=3"]
     if "proot" in os.uname().release.lower():
