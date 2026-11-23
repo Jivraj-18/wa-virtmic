@@ -93,6 +93,13 @@ start-up; repeated = bursty arrival).
   `wa_audio_probe.py watch` (passive hook, `install` after each page load) shows ctx clock ~1.000x.
   Far-end scoring: `audio_score.py sent.wav heard.wav [--gemini]` (unreliable while media clock < 0.97: time-
   compressed audio defeats alignment; use the clock + gaps instead).
+- **Native Termux (no proot) bench** (2026-11-23, branch termux-native, `BENCH_CDP_PORT=9345`, `--worklet --burn 2
+  --gemini`): the PulseAudio stall class is GONE - pacat write longest 6-26 ms (proot, same flags: 5/144/453/1031 ms),
+  syscall worst 1-5 ms (proot 18-36), media clock 1.000x every run, no proot tracer CPU (was 42-60 % avg).
+  BUT the buffer flags hurt natively: Chrome "mic frames dropped" ~4 % on all 6 flagged runs vs 0.00-0.01 % without
+  them (proot with flags: 0.4-2 %). Far-end dropout/lost % and Gemini stay noisy in BOTH variants (dropout 2-18 %,
+  Gemini 3-8 on identical settings), so they don't separate variants yet. Suspect for the far-end noise: aiortc's
+  SCTP checksum falls back to pure-Python google-crc32c in Termux (far end = data-channel receiver).
 - **Ruled out (tested, don't re-test)**: Python GIL / other threads (loop lag <= 75 ms during freezes); PulseAudio
   null sink running 2 s blocks (sink at 10 ms during freezes); opening new streams / resampling / pactl listings
   (no write blocking in an isolated test); Chrome consuming the mic (bench with and without: same); network (RTP loss
