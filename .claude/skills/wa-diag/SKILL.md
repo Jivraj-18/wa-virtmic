@@ -106,6 +106,11 @@ start-up; repeated = bursty arrival).
   dropout 0/0/1.3 %, Gemini 7/7/10, pacat write up to 106-161 ms, syscall worst 9-30 ms, proot ~30 % CPU avg.
   Fix for live calls: scripts/mic_apm.py forces WhatsApp's getUserMedia to EC/NS/AGC off (init script, survives
   reloads; checked in Chromium: getSettings() false/false/false after reload). Needs a real-call confirmation.
+- **First real call on native Termux** (2026-11-23 23:55, Hritik, 10 min, call 20261123_235537, APM off): voice
+  cut-outs 0.0 %, Chrome audio I/O gaps 0.2 %, pacat write longest 8 ms, syscall worst 8.9 ms, 5/29119 RTP lost;
+  Hritik: "perfectly fine", but "~3 s latency" (per-reply 0-3.7 s). The second half was ruined by BEHAVIOUR: asked for
+  the time/news, the model said "Checking." ~10 times (it has no tools) and refused Hindi when asked. Fixed in the
+  instructions (no tools -> say so; Hindi on request; current date/time injected at session start).
 - **Ruled out (tested, don't re-test)**: Python GIL / other threads (loop lag <= 75 ms during freezes); PulseAudio
   null sink running 2 s blocks (sink at 10 ms during freezes); opening new streams / resampling / pactl listings
   (no write blocking in an isolated test); Chrome consuming the mic (bench with and without: same); network (RTP loss

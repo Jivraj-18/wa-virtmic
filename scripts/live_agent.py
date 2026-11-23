@@ -231,7 +231,8 @@ class LiveAgent:
         finally:
             aistun.RETRY_MAX, aistun.RETRY_RTO = saved
         self.log(f"live: ICE gathered in {time.time() - t_ice:.1f}s")
-        body = {"session": {"model": MODEL, "instructions": self.instructions, "audio": {"output": {"voice": VOICE}}},
+        now = time.strftime("%A %d %B %Y, %H:%M %Z")   # the phone's clock; the model has no tools for anything else
+        body = {"session": {"model": MODEL, "instructions": self.instructions + f"\nCurrent date and time: {now}.", "audio": {"output": {"voice": VOICE}}},
                 "transport": {"type": "webrtc", "sdp": pc.localDescription.sdp}}
         t_post = time.time()
         req = urllib.request.Request(gateway.base() + "/openai/v1/live/sessions", data=json.dumps(body).encode(),
