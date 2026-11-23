@@ -28,7 +28,8 @@ OUT_SINK, MIC_SINK, MIC_SOURCE = "maya_out", "maya_mic_sink", "maya_mic"
 FORBIDDEN = {"virtmic", "virtmic_sink", "callout_sink"}
 NAME = os.environ.get("MAYA_NAME", "Maya")
 # On the phone (Termux + proot) Chrome draws on the answer daemon's invisible Xvfb :99; in the Codespace on noVNC :1.
-DISPLAY = os.environ.get("MAYA_DISPLAY") or (":99" if Path("/tmp/.X11-unix/X99").exists() else ":1")
+XTMP = os.environ.get("PREFIX", "") + "/tmp" if sys.platform == "android" else "/tmp"   # native Termux: $PREFIX/tmp
+DISPLAY = os.environ.get("MAYA_DISPLAY") or (":99" if Path(f"{XTMP}/.X11-unix/X99").exists() else ":1")
 IN_PROOT = "proot" in os.uname().release.lower()   # Chrome's sandbox crashes under proot's ptrace
 
 

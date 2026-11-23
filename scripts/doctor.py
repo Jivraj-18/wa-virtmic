@@ -119,7 +119,8 @@ def check_desktop():
                "the desktop-lite feature isn't running: /usr/local/share/desktop-init.sh true\n"
                "(or Codespaces: Command Palette > Rebuild Container)")
     disp = os.environ.get("DISPLAY", ":1")
-    sock = Path(f"/tmp/.X11-unix/X{disp.lstrip(':').split('.')[0]}")
+    xtmp = os.environ.get("PREFIX", "") + "/tmp" if sys.platform == "android" else "/tmp"   # native Termux
+    sock = Path(f"{xtmp}/.X11-unix/X{disp.lstrip(':').split('.')[0]}")
     if sock.exists():
         report("PASS", "X display", f"{disp} present")
     else:

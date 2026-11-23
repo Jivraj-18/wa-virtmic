@@ -426,6 +426,8 @@ def main():
         cdp = b.new_browser_cdp_session()
         cdp.send("Browser.grantPermissions", {"origin": ORIGIN, "permissions": ["audioCapture"]})
         log("mic permission granted to", ORIGIN, "- watching for incoming calls (Ctrl+C to stop)")
+        import mic_apm
+        apm_ctx = set()   # browser contexts that already have the getUserMedia hook (see mic_apm.py)
         warned = False
         while True:
             beat()
@@ -433,6 +435,10 @@ def main():
                 log("lost the CDP connection to Chrome - exiting")
                 sys.exit(3)
             pages = [p for c in b.contexts for p in c.pages if "whatsapp" in p.url]
+            for p in pages:
+                if id(p.context) not in apm_ctx:   # once per context, even if it failed (no log spam)
+                    mic_apm.install(p, log)
+                    apm_ctx.add(id(p.context))
             for p in pages:
                 try:
                     r = p.evaluate(FIND_ACCEPT_JS)

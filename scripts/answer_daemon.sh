@@ -14,6 +14,7 @@
 # Why a virtual display: Chrome used to draw on Termux:X11, an Android app. When that app is in the background
 # Android pauses it, and every Chrome call into X blocks - CDP stops answering and incoming calls are missed.
 # Xvfb (no root: extracted into ~/.local/opt/xvfb, see XVFB_HOME) is a normal process Android doesn't pause.
+# Native Termux (no proot): run it with scripts/termux/wa-answer-native.sh; see docs/TERMUX_NATIVE.md.
 #
 # Env: VOICE_ENGINE (default live = full-duplex gpt-live-1), AA_ARGS (extra auto_answer.py args),
 #      WA_DISPLAY (default :99), CHECK_SECS (default 20).
@@ -25,7 +26,14 @@ RUN="${XDG_RUNTIME_DIR:-$HOME/.cache}/wa-virtmic"; mkdir -p "$RUN"
 PIDFILE="$RUN/answer_daemon.pid"
 AA_PIDFILE="$RUN/auto_answer.pid"
 HEARTBEAT="$RUN/auto_answer.heartbeat"
-XVFB_HOME="${XVFB_HOME:-$HOME/.local/opt/xvfb}"
+# Native Termux (no proot, `uname -o` = Android; inside proot it says GNU/Linux): Termux's own Xvfb + Chromium, X
+# sockets in $PREFIX/tmp, Chromium's own sandbox works. proot: patched Xvfb in ~/.local/opt/xvfb, /tmp, --no-sandbox.
+if [ "$(uname -o)" = Android ]; then
+  NATIVE=1; XTMP="${TMPDIR:-$PREFIX/tmp}"; XVFB_BIN="$PREFIX/bin/Xvfb"; CHROME_EXE="$PREFIX/lib/chromium/chrome"
+else
+  NATIVE=0; XTMP=/tmp; XVFB_HOME="${XVFB_HOME:-$HOME/.local/opt/xvfb}"; XVFB_BIN="$XVFB_HOME/usr/bin/Xvfb.patched"
+  CHROME_EXE=/usr/lib/chromium/chromium
+fi
 WA_DISPLAY="${WA_DISPLAY:-:99}"
 CHECK_SECS="${CHECK_SECS:-20}"
 PROFILE="${CHROME_PROFILE:-$HOME/.config/wa-chrome-profile}"
@@ -40,7 +48,7 @@ cap() { # keep a log file under $2 bytes without breaking writers that hold it o
 }
 # Only the WhatsApp Chrome (its profile): Maya's Meet Chrome (scripts/meet, own profile + CDP :9333) must survive
 # WhatsApp restarts and must not be mistaken for a running WhatsApp Chrome. Anchored: never matches our own shell.
-chrome_pids() { pgrep -f "^/usr/lib/chromium/chromium .*--user-data-dir=$PROFILE( |\$)" ; }
+chrome_pids() { pgrep -f "^$CHROME_EXE .*--user-data-dir=$PROFILE( |\$)" ; }
 cdp_ok() { curl -s -m 15 -o /dev/null localhost:9222/json/version; }
 
 case "${1:-start}" in
@@ -71,7 +79,7 @@ fi
 echo $$ >"$PIDFILE"
 alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" 2>/dev/null
 pkill -f "^$PY -u $S/auto_answer.py" 2>/dev/null
-pkill -f "^$XVFB_HOME/usr/bin/Xvfb.patched $WA_DISPLAY" 2>/dev/null
+pkill -f "^$XVFB_BIN $WA_DISPLAY" 2>/dev/null
 pulseaudio --kill 2>/dev/null
 sleep 3
 rm -f "$AA_PIDFILE"
@@ -81,7 +89,7 @@ log "supervisor started (pid $$, display $WA_DISPLAY, engine ${VOICE_ENGINE:-liv
 [ -x /data/data/com.termux/files/usr/bin/termux-wake-lock ] && \
   /data/data/com.termux/files/usr/bin/termux-wake-lock >/dev/null 2>&1 && log "termux wake lock requested"
 
-export CHROME_EXTRA_ARGS="${CHROME_EXTRA_ARGS:---no-sandbox}"
+[ $NATIVE = 1 ] || export CHROME_EXTRA_ARGS="${CHROME_EXTRA_ARGS:---no-sandbox}"
 export VOICE_ENGINE="${VOICE_ENGINE:-live}"
 export AA_HEARTBEAT="$HEARTBEAT"
 cdp_fail=0; aa_fails=0; last_wa=""
@@ -98,11 +106,15 @@ ensure_audio() {
 ensure_x() {
   DISPLAY=$WA_DISPLAY timeout 5 xdpyinfo >/dev/null 2>&1 && return 0
   log "X display $WA_DISPLAY not answering - (re)starting Xvfb"
-  pkill -f "^$XVFB_HOME/usr/bin/Xvfb.patched $WA_DISPLAY" 2>/dev/null; sleep 1
-  ln -sfn "$XVFB_HOME/usr/bin" /tmp/xkb   # Xvfb.patched looks for xkbcomp in /tmp/xkb (was /usr/bin, needs root)
-  rm -f "/tmp/.X${WA_DISPLAY#:}-lock" "/tmp/.X11-unix/X${WA_DISPLAY#:}"
-  LD_LIBRARY_PATH="$XVFB_HOME/usr/lib/aarch64-linux-gnu" setsid nohup "$XVFB_HOME/usr/bin/Xvfb.patched" "$WA_DISPLAY" \
-    -screen 0 1280x800x24 -nolisten tcp </dev/null >/dev/null 2>&1 &
+  pkill -f "^$XVFB_BIN $WA_DISPLAY" 2>/dev/null; sleep 1
+  rm -f "$XTMP/.X${WA_DISPLAY#:}-lock" "$XTMP/.X11-unix/X${WA_DISPLAY#:}"
+  if [ $NATIVE = 1 ]; then
+    setsid nohup "$XVFB_BIN" "$WA_DISPLAY" -screen 0 1280x800x24 -nolisten tcp </dev/null >/dev/null 2>&1 &
+  else
+    ln -sfn "$XVFB_HOME/usr/bin" /tmp/xkb   # Xvfb.patched looks for xkbcomp in /tmp/xkb (was /usr/bin, needs root)
+    LD_LIBRARY_PATH="$XVFB_HOME/usr/lib/aarch64-linux-gnu" setsid nohup "$XVFB_BIN" "$WA_DISPLAY" \
+      -screen 0 1280x800x24 -nolisten tcp </dev/null >/dev/null 2>&1 &
+  fi
   for _ in $(seq 20); do DISPLAY=$WA_DISPLAY timeout 3 xdpyinfo >/dev/null 2>&1 && return 0; sleep 0.5; done
   log "ERROR: Xvfb did not come up"; return 1
 }

@@ -32,6 +32,9 @@ CHROME_ARGS=(--user-data-dir="$PROFILE" --remote-debugging-port=9222 --no-first-
              --disable-dev-shm-usage --start-maximized)
 # shellcheck disable=SC2206
 CHROME_ARGS+=(${CHROME_EXTRA_ARGS:-})
+# Native Termux (no proot): the bigger buffers are not needed and make Chrome drop ~4 % of mic frames (bench,
+# 2026-11-23: 6 runs with vs 3 without: mic frames dropped 4.2 % vs 0.00 %), so they default to off there.
+if [ "$(uname -o)" = Android ]; then : "${CHROME_PULSE_LATENCY_MSEC:=0}" "${CHROME_AUDIO_BUFFER_SIZE:=0}"; fi
 if [ "${CHROME_PULSE_LATENCY_MSEC:-150}" != 0 ]; then export PULSE_LATENCY_MSEC="${CHROME_PULSE_LATENCY_MSEC:-150}"; fi
 if [ "${CHROME_AUDIO_BUFFER_SIZE:-2048}" != 0 ]; then CHROME_ARGS+=(--audio-buffer-size="${CHROME_AUDIO_BUFFER_SIZE:-2048}"); fi
 if [ -n "${CHROME_LOG:-}" ]; then

@@ -89,6 +89,8 @@ def main():
         # Without this WhatsApp shows "Allow microphone" and the call never starts (stuck at "Connecting").
         b.new_browser_cdp_session().send("Browser.grantPermissions",
                                          {"origin": aa.ORIGIN, "permissions": ["audioCapture"]})
+        import mic_apm
+        mic_apm.install(page, aa.log)   # before open_chat's reload: the init script covers the reloaded page
         aa.log(f"opening chat for {name} (+{num})")
         open_chat(page, num)
         btn = page.locator('#main header [aria-label="Voice call"]').first
