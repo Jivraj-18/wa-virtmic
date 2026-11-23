@@ -20,3 +20,6 @@ experiments/runs/
 /callcenter/
 scripts/callcenter_state.json
 scripts/bench/
+
+# call-center desk: per-person notes and reminders (personal data)
+scripts/contacts/

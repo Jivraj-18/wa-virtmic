@@ -107,7 +107,8 @@ class LiveAgent:
         async def progress(note):
             send("thinking", note)
         try:
-            ok, text = await self.claude.run(ctx, time.strftime("%A %d %B %Y, %H:%M %Z"), progress, self.log)
+            ok, text = await self.claude.run(Path(self.transcript).parent, ctx, time.strftime("%A %d %B %Y, %H:%M %Z"),
+                                             progress, self.log)
         except Exception as e:
             ok, text = False, f"my research helper failed ({type(e).__name__})"
         self.say("TOOL", ("Claude: " if ok else "Claude FAILED: ") + text)

@@ -177,6 +177,8 @@ while true; do
     else
       [ $(( $(date +%s) - $(stat -c %Y "$HEARTBEAT") )) -lt 5 ] && aa_fails=0
     fi
+    # call-center desk: send WhatsApp reminders that are due (cc.py remind); exits at once when none are
+    timeout 60 "$PY" "$S/cc.py" due >>"$LOG" 2>&1
     # Every ~5 min, note whether WhatsApp is still logged in (a QR screen needs a human; we can only report it).
     if [ $(( $(date +%s) / 300 )) != "${last_check:-}" ]; then
       last_check=$(( $(date +%s) / 300 )); st=$(wa_state)

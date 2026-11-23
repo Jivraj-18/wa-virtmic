@@ -212,8 +212,21 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
     except Exception as e:
         sampler = None
         log(f"sysstats sampler not started: {type(e).__name__}: {e}")
-    if ctx:
-        (d / "call_meta.json").write_text(json.dumps({"caller": caller, "context": ctx["path"]}))
+    # Who is on the line (call-center desk, cc.py): number from WhatsApp's own contact store, no page navigation.
+    num, card_text = None, ""
+    try:
+        import wa_store, cc
+        if caller:
+            r = wa_store.read(page, caller, 8)
+            num, caller = r["num"], r["name"] or caller
+            card_text = "\n\nWHO YOU ARE TALKING TO (from our records):\n" + cc.card(
+                num, r["name"], skip=d, chat_lines=cc._fmt_msgs(r))
+            log(f"caller: {caller} (+{num})")
+    except Exception as e:
+        log(f"caller lookup failed: {type(e).__name__}: {e}")
+    (d / "call_meta.json").write_text(json.dumps({"caller": caller, "name": caller, "num": num,
+                                                   "direction": "outgoing" if not speak_first else "incoming",
+                                                   "context": ctx["path"] if ctx else None}))
 
     agent = th = None
     hangup = threading.Event()
@@ -259,7 +272,7 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                     instant_greeting = True
             log(f"voice engine: {engine}")
             agent = AgentCls(transcript=d / "transcript_live.txt", log=log, on_line=watcher.feed,
-                          instructions=INSTRUCTIONS + hang + extra_instructions, **kw)
+                          instructions=INSTRUCTIONS + hang + extra_instructions + card_text, **kw)
         th = agent.start_thread(max_secs)
         # Mic wait + stream routing now run WHILE the agent connects (ICE + session setup take seconds); before,
         # they ran first and the caller heard ~15 s of silence after we picked up.
@@ -336,6 +349,11 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         sampler.close()
     dur = time.time() - t0
     log(f"call ended after {dur:.0f}s")
+    # back office wrap-up (notes for next time, anything promised, escalation) - not a daemon: a process that is
+    # about to exit (wa_call.py) waits for it
+    import claude_tool
+    if claude_tool.enabled() and num:
+        threading.Thread(target=claude_tool.finish, args=(d, log), name="claude-wrapup").start()
     try:  # keep this call's log lines next to its recording (wa_call_<who>.log is overwritten by the next call)
         import call_diag
         _, lines = call_diag.find_log(d)
@@ -389,6 +407,7 @@ def beat():
 
 
 def main():
+    os.environ.setdefault("LIVE_CLAUDE_TOOL", "1")   # call-center desk: Claude Code as the AI's back office
     ap = argparse.ArgumentParser()
     ap.add_argument("--greeting", default=GREETING)
     ap.add_argument("--max", type=int, default=1800, help="max seconds to record a call")
@@ -456,6 +475,9 @@ def main():
                         warned = True
                     continue
                 caller = None
+                if r.get("found"):   # who is calling (saved name or number from the popup) -> call-center desk
+                    from context import caller_from_text
+                    caller = caller_from_text(r.get("text"))
                 if r.get("found") and a.context:
                     from context import caller_allowed, caller_from_text, load_context
                     caller = caller_from_text(r.get("text"))
