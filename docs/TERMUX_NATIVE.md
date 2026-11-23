@@ -36,6 +36,9 @@ Everything we need exists natively in Termux (checked 2026-11-23): `chromium` (1
 
 ## Plan
 
+**Status 2026-11-23: steps 1-5 done, native stack live (see wa-ops); step 6 (real call) pending.** Note: the proot
+rootfs is under `containers/debian/rootfs`, not `installed-rootfs`.
+
 1. **Working copy**: `git clone /data/data/com.termux/files/usr/var/lib/proot-distro/installed-rootfs/debian/home/phone/wa-virtmic ~/wa-virtmic`
    (local clone, no GitHub auth), `git checkout termux-phone-setup`. Copy `scripts/.env` from the same rootfs path.
 2. **Packages** (Termux): `pkg install x11-repo && pkg install chromium xorg-server-xvfb pulseaudio python-playwright

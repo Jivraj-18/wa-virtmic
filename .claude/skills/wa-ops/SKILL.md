@@ -22,6 +22,17 @@ in `~/.local/opt/xvfb`, patched to find xkbcomp via the `/tmp/xkb` symlink) -> C
 from a proot shell (including this session) dies with it. The durable way: in a plain Termux session (not proot)
 `bash ~/wa-answer.sh` (copy of `scripts/termux/wa-answer.sh`; keeps a wake lock and restarts the supervisor forever).
 
+## Native Termux (no proot) - LIVE since 2026-11-23 23:50 (branch termux-native)
+- Started by `~/wa-answer.sh` = copy of `scripts/termux/wa-answer-native.sh` (no proot-distro); repo `~/wa-virtmic`,
+  profile `~/.config/wa-chrome-profile` (copied from the proot one, Chromium 156 -> 158, stayed logged in).
+  Same commands as above, run with `python`/`bash` from Termux. Setup from scratch: `scripts/termux/install_native.sh`.
+- The proot copy (`$PREFIX/var/lib/proot-distro/containers/debian/rootfs/home/phone/...`, NOT installed-rootfs) holds
+  the same WhatsApp session: never start its Chrome while the native one runs (same linked device twice).
+- Native gotchas: no `/usr/bin/env` unless termux-exec is preloaded -> call scripts as `bash x.sh`, not `./x.sh`;
+  toybox `df` has no `-m`; Chromium is `chromium-browser` (exe `$PREFIX/lib/chromium/chrome`; `google-chrome` symlink
+  in ~/.local/bin); X sockets in `$PREFIX/tmp`; the supervisor's clean start restarts Xvfb/PulseAudio/Chrome, so
+  don't start Chrome by hand first.
+
 ## WhatsApp logged out (`qr: True`)
 Nobody can see or scan the QR, because Chrome is on the invisible display. Use a link code instead:
 1. Ask the user for the WhatsApp account's number. Don't store it in the repo.

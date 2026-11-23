@@ -16,14 +16,14 @@
 #                       Set either to 0 to use Chrome's default.
 set -euo pipefail
 cd "$(dirname "$0")"
-./audio_setup.sh >/dev/null
+bash ./audio_setup.sh >/dev/null   # bash: native Termux has no /usr/bin/env without termux-exec
 export DISPLAY="${DISPLAY:-:1}"
 export PULSE_SERVER="unix:$(pactl info | sed -n 's/^Server String: //p')"
 PROFILE="${CHROME_PROFILE:-$HOME/.config/wa-chrome-profile}"
 mkdir -p "$PROFILE"
 if curl -s localhost:9222/json/version >/dev/null; then echo "Chrome already running on :9222"; exit 0; fi
 rm -f "$PROFILE/chrome.log"  # old unbounded log location - never written any more
-free_mb=$(df -Pm "$PROFILE" | awk 'NR==2{print $4}')
+free_mb=$(df -Pk "$PROFILE" | awk 'NR==2{print int($4/1024)}')   # -k: Termux's df has no -m
 if [ "$free_mb" -lt $(( ${DISK_MIN_FREE_GB:-2} * 1000 )) ]; then
   echo "WARNING: only ${free_mb} MB free - Chrome log disabled; free up space before calls (recordings will be skipped)" >&2
   CHROME_LOG=""

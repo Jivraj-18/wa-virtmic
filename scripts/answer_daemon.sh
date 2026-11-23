@@ -97,10 +97,10 @@ cdp_fail=0; aa_fails=0; last_wa=""
 ensure_audio() {
   if ! pactl info >/dev/null 2>&1; then
     log "pulseaudio not running - starting it (and restarting Chrome, whose audio was on the old server)"
-    "$S/audio_setup.sh" >/dev/null 2>&1
+    bash "$S/audio_setup.sh" >/dev/null 2>&1
     [ -n "$(chrome_pids)" ] && restart_chrome "pulseaudio restarted"
   fi
-  pactl list short sinks 2>/dev/null | grep -q virtmic_sink || { log "virtual audio devices missing - creating"; "$S/audio_setup.sh" >/dev/null 2>&1; }
+  pactl list short sinks 2>/dev/null | grep -q virtmic_sink || { log "virtual audio devices missing - creating"; bash "$S/audio_setup.sh" >/dev/null 2>&1; }
 }
 
 ensure_x() {

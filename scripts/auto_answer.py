@@ -410,7 +410,7 @@ def main():
         log(f"another auto_answer.py already holds {lock_path} - exiting")
         sys.exit(4)
 
-    subprocess.run([str(HERE / "audio_setup.sh")], stdout=subprocess.DEVNULL, check=True)
+    subprocess.run(["bash", str(HERE / "audio_setup.sh")], stdout=subprocess.DEVNULL, check=True)
     if os.environ.get("VOICE_ENGINE", "realtime") == "live":
         t = time.time()
         import live_agent, aiortc, av  # noqa: F401  ~8 s on the phone: do it now, not after accepting a call
