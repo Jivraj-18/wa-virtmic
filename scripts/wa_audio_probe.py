@@ -71,9 +71,18 @@ def main():
             with open(out, "a") as f:
                 end = time.time() + secs
                 while time.time() < end:
-                    s = page.evaluate(SAMPLE_JS)
-                    if s is None:
-                        print("probe not installed"); return
+                    try:
+                        s = page.evaluate(SAMPLE_JS)
+                        if s is None:   # page (re)loaded: hooks gone -> reinstall (catches the next call)
+                            print(time.strftime("%H:%M:%S"), "probe", page.evaluate(INSTALL_JS), flush=True)
+                            prev = None
+                            page.wait_for_timeout(1000)
+                            continue
+                    except Exception as e:  # noqa: BLE001 - navigation in progress
+                        print(time.strftime("%H:%M:%S"), "page busy:", str(e)[:80], flush=True)
+                        prev = None
+                        page.wait_for_timeout(1000)
+                        continue
                     f.write(json.dumps(s) + "\n"); f.flush()
                     if prev:
                         dt = s["now"] - prev["now"]

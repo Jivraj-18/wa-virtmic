@@ -80,7 +80,10 @@ start-up; repeated = bursty arrival).
   1.7-3 %; --audio-buffer-size=2048 0.92-0.98x / 0-3 %; latencyHint playback, mic 48 kHz, dither: no help;
   --no-apm 0.88x / 3 % (1 run). 3+ runs with --burn 2: default 0.61x / 25 %; PULSE_LATENCY 150: 0.94x / 2.3 %;
   buffer 2048: 0.93x / 1.3 %; BOTH: 0.98x / 0.6 % -> now the default in launch_chrome.sh (2026-11-23 16:57).
-  Confirm on a real call: caller.wav gaps < 2 % and
+  CONFIRMED on a real call (20261123_170450, Praveen): Chrome audio I/O gaps 41 % -> 1.5 %, Praveen: "the quality
+  is perfect", one brief "bit of jitter" later. Probe tip: wa_call.py reloads the page (send?phone=), and WhatsApp
+  builds its audio graph at dial time, so `wa_audio_probe.py install` must run after the reload and BEFORE dialing.
+  Older notes:
   `wa_audio_probe.py watch` (passive hook, `install` after each page load) shows ctx clock ~1.000x.
   Far-end scoring: `audio_score.py sent.wav heard.wav [--gemini]` (unreliable while media clock < 0.97: time-
   compressed audio defeats alignment; use the clock + gaps instead).
