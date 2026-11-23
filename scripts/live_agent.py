@@ -38,6 +38,11 @@ class LiveAgent:
                  in_device="callout_sink.monitor", out_device="virtmic_sink", on_line=None, **_ignored):
         self.transcript, self.log, self.on_line = transcript, log, on_line
         self.instructions = instructions
+        import claude_tool
+        self.claude = claude_tool if claude_tool.enabled() else None
+        if self.claude:
+            self.instructions += claude_tool.INSTRUCTIONS
+        self._lines = []   # transcript lines, context for delegated tasks
         if greeting is None:
             self.instructions += "\nWait for the other person to speak first; don't talk while the phone is ringing."
         elif greeting:
@@ -55,6 +60,7 @@ class LiveAgent:
             return
         t = time.time() - self.t0
         line = f"[{int(t) // 60:02d}:{t % 60:04.1f}] {who:6s} {text.strip()}"
+        self._lines.append(f"{who}: {text.strip()}")
         self.log(line)
         if self.transcript:
             with open(self.transcript, "a") as f:
@@ -83,6 +89,29 @@ class LiveAgent:
             self._flush("CALLER" if "input" in ty else "AI")
         elif ty == "error":
             self.log(f"live error: {json.dumps(ev)[:300]}")
+
+    # ---- delegation (GPT-Live hands a task to us; we answer with Claude Code) --------------------------
+    async def _delegate(self, ev: dict, dc):
+        did = (ev.get("delegation") or {}).get("id")
+        def send(kind, content):
+            if dc.readyState == "open":
+                dc.send(json.dumps({"type": f"session.{kind}.append", "delegation_id": did, "content": content}))
+        if not self.claude:   # nothing to delegate to: say so at once (before, the model looped on "Checking.")
+            send("commentary", "I can't look that up on this call - I have no internet or tools here.")
+            self.log("live: delegation without a tool -> told the caller it can't be looked up")
+            return
+        ctx = list(self._lines) + [f"{w}: {b.strip()}" for w, b in self._buf.items() if b.strip()]
+        self.say("TOOL", "asking Claude")
+        send("thinking", "Your research helper Claude is working on it now (usually 10-40 s). Tell the caller once, "
+                         "then keep chatting with them while you wait.")
+        async def progress(note):
+            send("thinking", note)
+        try:
+            ok, text = await self.claude.run(ctx, time.strftime("%A %d %B %Y, %H:%M %Z"), progress, self.log)
+        except Exception as e:
+            ok, text = False, f"my research helper failed ({type(e).__name__})"
+        self.say("TOOL", ("Claude: " if ok else "Claude FAILED: ") + text)
+        send("commentary", text if ok else f"Sorry, I couldn't get that: {text}.")
 
     # ---- main --------------------------------------------------------------------------------------
     async def run(self, max_seconds: float = 3600):
@@ -155,6 +184,8 @@ class LiveAgent:
             if ev.get("type") == "session.started" and not started.done():
                 started.set_result(ev)
             self._on_event(ev)
+            if ev.get("type") == "session.delegation.created":
+                tasks.append(asyncio.ensure_future(self._delegate(ev, dc)))
 
         async def play(track):
             rs = av.AudioResampler(format="s16", layout="mono", rate=RATE)
@@ -232,7 +263,10 @@ class LiveAgent:
             aistun.RETRY_MAX, aistun.RETRY_RTO = saved
         self.log(f"live: ICE gathered in {time.time() - t_ice:.1f}s")
         now = time.strftime("%A %d %B %Y, %H:%M %Z")   # the phone's clock; the model has no tools for anything else
-        body = {"session": {"model": MODEL, "instructions": self.instructions + f"\nCurrent date and time: {now}.", "audio": {"output": {"voice": VOICE}}},
+        body = {"session": {"model": MODEL, "instructions": self.instructions + f"\nCurrent date and time: {now}.", "audio": {"output": {"voice": VOICE}},
+                            # client delegation: WE answer GPT-Live's hand-offs (claude_tool.py); 800 ms = max wait
+                            # before its automatic spoken acknowledgement
+                            "delegation": {"type": "client", "acknowledgement_delay_ms": 800}},
                 "transport": {"type": "webrtc", "sdp": pc.localDescription.sdp}}
         t_post = time.time()
         req = urllib.request.Request(gateway.base() + "/openai/v1/live/sessions", data=json.dumps(body).encode(),

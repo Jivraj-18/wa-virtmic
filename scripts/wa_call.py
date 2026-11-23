@@ -89,6 +89,7 @@ def main():
         # Without this WhatsApp shows "Allow microphone" and the call never starts (stuck at "Connecting").
         b.new_browser_cdp_session().send("Browser.grantPermissions",
                                          {"origin": aa.ORIGIN, "permissions": ["audioCapture"]})
+        os.environ.setdefault("LIVE_CLAUDE_TOOL", "1")   # outgoing calls: Claude Code as the AI's tool (claude_tool.py)
         import mic_apm
         mic_apm.install(page, aa.log)   # before open_chat's reload: the init script covers the reloaded page
         aa.log(f"opening chat for {name} (+{num})")
