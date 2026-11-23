@@ -83,6 +83,12 @@ start-up; repeated = bursty arrival).
   CONFIRMED on a real call (20261123_170450, Praveen): Chrome audio I/O gaps 41 % -> 1.5 %, Praveen: "the quality
   is perfect", one brief "bit of jitter" later. Probe tip: wa_call.py reloads the page (send?phone=), and WhatsApp
   builds its audio graph at dial time, so `wa_audio_probe.py install` must run after the reload and BEFORE dialing.
+  Laptop OBS recording (bench/evidence_20261123_praveen2, track0 = speaker): audio_score dropout 25.5 % -> 0.3 %
+  (first 2 min) / 3.4 % (later), lost speech 22.8 % -> 0-1.2 %, LSD 29.5 -> 11-13 dB; Gemini 3 -> 7 (early) / 4
+  (late: "static in pauses", 1 run). The later jitter was OUR side: 17:07:38-17:08:03 pacat writes blocked up to
+  385 ms, ai.wav gaps 1 % -> 3 % (PulseAudio/proot stall class, not Chrome). Mouth-to-ear in the counting game
+  ~4 s (laptop mic vs speaker word timestamps): ~3 s ours (mostly GPT-Live turn-taking), ~0.5-1 s WhatsApp legs.
+  The "+0.66 s vs real time" caller line is a constant start offset, not a backlog.
   Older notes:
   `wa_audio_probe.py watch` (passive hook, `install` after each page load) shows ctx clock ~1.000x.
   Far-end scoring: `audio_score.py sent.wav heard.wav [--gemini]` (unreliable while media clock < 0.97: time-

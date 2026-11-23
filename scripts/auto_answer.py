@@ -320,6 +320,12 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 f"(end call: {how})")
             break
         page.wait_for_timeout(500)
+    else:  # max_secs reached: hang up, or the caller is left on a live call with nobody talking (2026-11-23)
+        try:
+            how = page.evaluate(END_CALL_JS)
+        except Exception as e:
+            how = f"error {e}"
+        log(f"max call length {max_secs}s reached - ending the call (end call: {how})")
     silence.stop()
     if agent:
         agent.stop.set()
