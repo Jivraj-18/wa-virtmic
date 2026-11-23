@@ -287,7 +287,7 @@ def run(a):
                 f"{chrome_eval('startCall(' + json.dumps(opts) + ')')}")
         wl_conn.set()
         time.sleep(2)
-        for text, wav in lines:
+        for text, wav in lines * a.rounds:
             if not th.is_alive():
                 break
             log(f"bench: caller says: {text}")
@@ -342,6 +342,7 @@ def main():
     ap.add_argument("--latency-hint", default="interactive", help="AudioContext latencyHint for --worklet "
                     "(interactive|balanced|playback or seconds)")
     ap.add_argument("--chrome-args", default="", help="extra Chrome flags, e.g. '--audio-buffer-size=2048'")
+    ap.add_argument("--rounds", type=int, default=1, help="repeat the caller's lines N times (longer call)")
     ap.add_argument("--gemini", action="store_true", help="also rate heard.wav vs ai.wav with Gemini")
     a = ap.parse_args()
     global MIC_RATE, CHROME_EXTRA
