@@ -8,6 +8,12 @@
 #                       (default 5 MB) - use it only to debug a Chrome that won't start. Unset (default): Chrome's
 #                       output is discarded. Nothing in wa-virtmic reads it; an unbounded chrome.log in the
 #                       profile once grew to 50 GB and filled a phone.
+#   CHROME_PULSE_LATENCY_MSEC (default 150) / CHROME_AUDIO_BUFFER_SIZE (default 2048): bigger PulseAudio buffers.
+#                       WhatsApp Web's call audio (mic included) runs in WebAudio, clocked by Chrome's audio OUTPUT;
+#                       with Chrome's default ~10 ms buffers that output starves under proot, WebAudio runs at
+#                       0.35-0.9x real time and our mic audio is dropped (stutter at the other end). Bench
+#                       (bench_call.py --worklet --burn 2, 3+ runs): media clock 0.61x -> 0.98x, output gaps 25 % -> 0.6 %.
+#                       Set either to 0 to use Chrome's default.
 set -euo pipefail
 cd "$(dirname "$0")"
 ./audio_setup.sh >/dev/null
@@ -26,6 +32,8 @@ CHROME_ARGS=(--user-data-dir="$PROFILE" --remote-debugging-port=9222 --no-first-
              --disable-dev-shm-usage --start-maximized)
 # shellcheck disable=SC2206
 CHROME_ARGS+=(${CHROME_EXTRA_ARGS:-})
+if [ "${CHROME_PULSE_LATENCY_MSEC:-150}" != 0 ]; then export PULSE_LATENCY_MSEC="${CHROME_PULSE_LATENCY_MSEC:-150}"; fi
+if [ "${CHROME_AUDIO_BUFFER_SIZE:-2048}" != 0 ]; then CHROME_ARGS+=(--audio-buffer-size="${CHROME_AUDIO_BUFFER_SIZE:-2048}"); fi
 if [ -n "${CHROME_LOG:-}" ]; then
   # awk keeps draining the pipe after the cap (so Chrome never sees a broken stderr) but stops writing.
   nohup google-chrome --log-level=2 "${CHROME_ARGS[@]}" https://web.whatsapp.com 2>&1 </dev/null \

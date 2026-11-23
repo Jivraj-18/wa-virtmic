@@ -78,8 +78,9 @@ start-up; repeated = bursty arrival).
   native-WebRTC bench is clean even at 260 % CPU. Screening (1 run each, + one partial run of a 3x round with
   --burn 2), media clock / Chrome output gaps: default 0.42-0.69x / 10-67 %; PULSE_LATENCY_MSEC=150 0.92-0.99x /
   1.7-3 %; --audio-buffer-size=2048 0.92-0.98x / 0-3 %; latencyHint playback, mic 48 kHz, dither: no help;
-  --no-apm 0.88x / 3 % (1 run). NEXT: finish >= 3 runs (`bench_table.py`), then with the user's OK restart the
-  WhatsApp Chrome with the winner in launch_chrome.sh, confirm on a real call: caller.wav gaps < 2 % and
+  --no-apm 0.88x / 3 % (1 run). 3+ runs with --burn 2: default 0.61x / 25 %; PULSE_LATENCY 150: 0.94x / 2.3 %;
+  buffer 2048: 0.93x / 1.3 %; BOTH: 0.98x / 0.6 % -> now the default in launch_chrome.sh (2026-11-23 16:57).
+  Confirm on a real call: caller.wav gaps < 2 % and
   `wa_audio_probe.py watch` (passive hook, `install` after each page load) shows ctx clock ~1.000x.
   Far-end scoring: `audio_score.py sent.wav heard.wav [--gemini]` (unreliable while media clock < 0.97: time-
   compressed audio defeats alignment; use the clock + gaps instead).
