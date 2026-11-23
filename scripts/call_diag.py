@@ -267,13 +267,19 @@ def report(d, short=False):
     sl = sysload(d)
     if short:
         med = sorted(lats)[len(lats) // 2] if lats else None
-        print(f"{d.name}  engine {pl['engine']:8s} cut-outs {cut:4.1f}%  reply median {med if med is not None else '-'} s "
+        cg = cutouts(caller)[0] if caller.exists() else 0
+        print(f"{d.name}  engine {pl['engine']:8s} cut-outs {cut:4.1f}%  chrome-io gaps {cg:4.1f}%  reply median {med if med is not None else '-'} s "
               f"max {max(lats) if lats else '-'} s  turns {len(lats)}  "
               f"{'sysstats' if sl else 'no-sysstats'}")
         return
     print(f"== call {d.name}  (log: {logf.name if logf else 'not found'}, engine {pl['engine']})")
     print(f"[{_v(cut < 1, cut > 3)}] voice cut-outs: {cut:.1f}% of {speech / 100:.0f} s of AI speech "
           "(good < 1 %, 'cracky' > 3 %)")
+    if caller.exists():   # Chrome's audio output starving: the same clock drives WhatsApp's mic path (WebAudio)
+        cg, cs = cutouts(caller)
+        if cs > 100:
+            print(f"[{_v(cg < 2, cg > 8)}] Chrome audio I/O gaps: {cg:.1f}% of {cs / 100:.0f} s of caller speech "
+                  "(caller.wav; > 8 % = Chrome's PulseAudio output starving -> WhatsApp drops our mic audio too)")
     if lats:
         print(f"[{_v(max(lats) < 2, max(lats) > 4)}] reply latency: " +
               ", ".join(f"@{t:.0f}s {l:.1f}s" for t, l in lat) + "  (good < 2 s)")

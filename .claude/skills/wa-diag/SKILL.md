@@ -68,6 +68,21 @@ start-up; repeated = bursty arrival).
 - **Incoming caller heard ~25 s of silence and hung up** (2026-11-23): GPT-Live only gets "greet when the call
   connects" as an instruction and waited ~18 s, on top of a slow session start (6-7 s vs ~2 s). Incoming live calls
   now play the recorded greeting (`greeting.wav`) as soon as Chrome's mic is up; the model is told it was said.
+- **Other side hears stutter / metallic / lost sentence starts while ai.wav is clean** (2026-11-23, Praveen call,
+  Gemini 3/10): WhatsApp Web does NOT use Chrome's native WebRTC audio; it runs its own WASM VoIP stack
+  (WAWebVoipWebWasmLoader, data channel), so our mic goes getUserMedia -> WebAudio -> WASM. WebAudio is clocked by
+  Chrome's AUDIO OUTPUT; under proot that PulseAudio output (~10 ms buffers) starves, the AudioContext runs at
+  0.4-0.9x real time and the mic audio that doesn't fit is dropped. Live evidence: caller.wav (Chrome's output)
+  has 4-50 % gaps on every call (`call_diag` line "Chrome audio I/O gaps"; Praveen call 41 %).
+  Bench repro: `bench_call.py --worklet` (WhatsApp-like AudioWorklet capture -> data channel -> far end process);
+  native-WebRTC bench is clean even at 260 % CPU. Screening (1 run each, + one partial run of a 3x round with
+  --burn 2), media clock / Chrome output gaps: default 0.42-0.69x / 10-67 %; PULSE_LATENCY_MSEC=150 0.92-0.99x /
+  1.7-3 %; --audio-buffer-size=2048 0.92-0.98x / 0-3 %; latencyHint playback, mic 48 kHz, dither: no help;
+  --no-apm 0.88x / 3 % (1 run). NEXT: finish >= 3 runs (`bench_table.py`), then with the user's OK restart the
+  WhatsApp Chrome with the winner in launch_chrome.sh, confirm on a real call: caller.wav gaps < 2 % and
+  `wa_audio_probe.py watch` (passive hook, `install` after each page load) shows ctx clock ~1.000x.
+  Far-end scoring: `audio_score.py sent.wav heard.wav [--gemini]` (unreliable while media clock < 0.97: time-
+  compressed audio defeats alignment; use the clock + gaps instead).
 - **Ruled out (tested, don't re-test)**: Python GIL / other threads (loop lag <= 75 ms during freezes); PulseAudio
   null sink running 2 s blocks (sink at 10 ms during freezes); opening new streams / resampling / pactl listings
   (no write blocking in an isolated test); Chrome consuming the mic (bench with and without: same); network (RTP loss
