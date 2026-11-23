@@ -28,7 +28,8 @@ import diskguard  # noqa: E402
 
 CALLS = HERE / "calls"
 
-GREETING = "Hello! This is an AI speaking through a virtual microphone. If you can hear me, please say yes."
+GREETING = "Hello! You've reached an AI assistant. How can I help you?"
+GREETING_SAID = GREETING  # what greeting.wav says (set from --greeting in main)
 ORIGIN = "https://web.whatsapp.com"
 
 # Returns {found, label, html} for an incoming-call accept control, else {found:false}.
@@ -103,7 +104,15 @@ END_CALL_TOOL = {"type": "function", "name": "end_call",
                                 "clearly says goodbye. Say a short goodbye first, then call this.",
                  "parameters": {"type": "object", "properties": {}}}
 
-CALL_ACTIVE_JS = """() => !!document.querySelector('[aria-label="Call controls"], [aria-label="End call"], [aria-label="End icon button"], [aria-label="Mute microphone"]')"""
+CALL_ACTIVE_JS = """() => !!document.querySelector('[aria-label="Call controls"], [aria-label="End call"], [aria-label="End icon button"], [aria-label="Mute microphone"], [aria-label="Unmute microphone"]')"""
+# WhatsApp Web muted our mic by itself mid-call (2026-11-23: "Mute microphone" when answered, "Unmute microphone"
+# 18 s later; the other phone showed "muted" and heard nothing). Nothing of ours clicks it, so on every poll: if the
+# call shows "Unmute microphone", click it (and log when, to learn what triggers it).
+UNMUTE_JS = r"""() => {
+  const b = [...document.querySelectorAll('[aria-label="Unmute microphone"]')].find(el => el.offsetParent !== null);
+  if (!b) return false;
+  b.click(); return true;
+}"""
 
 
 def start_rec(device: str, path: Path) -> subprocess.Popen:
@@ -220,6 +229,7 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             return {"ok": True, "status": "hanging up"}
         return {"error": f"unknown tool {name}"}
 
+    instant_greeting = False
     if mode == "realtime":
         hang = ("\nIf the caller asks you to end or cut the call, say ONE short goodbye line and stop talking - "
                 "the call is hung up automatically after your goodbye. Never say goodbye otherwise.")
@@ -240,7 +250,13 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             AgentCls = Agent
             if engine == "live":  # full-duplex GPT-Live over WebRTC (live_agent.py)
                 from live_agent import LiveAgent as AgentCls
-                kw.setdefault("greeting", "Greet the caller in one short sentence and say you are an AI assistant.")
+                if speak_first:
+                    # GPT-Live decides itself when to talk and has waited up to ~20 s before greeting (plus a slow
+                    # session start) - callers hung up in the silence. So the recorded greeting plays the moment
+                    # Chrome's mic is up, and the model is told it has already been said.
+                    kw["greeting"] = (f'You have ALREADY greeted the caller with this recorded line: "{GREETING_SAID}". '
+                                      "Don't greet again; wait for their reply and continue from there.")
+                    instant_greeting = True
             log(f"voice engine: {engine}")
             agent = AgentCls(transcript=d / "transcript_live.txt", log=log, on_line=watcher.feed,
                           instructions=INSTRUCTIONS + hang + extra_instructions, **kw)
@@ -248,16 +264,20 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         # Mic wait + stream routing now run WHILE the agent connects (ICE + session setup take seconds); before,
         # they ran first and the caller heard ~15 s of silence after we picked up.
         route_when_ready()
+        if instant_greeting:
+            log("playing the recorded greeting now (the live model was told it has been said)")
+            threading.Thread(target=play_wav, args=(greeting,), daemon=True).start()
         th.join(10)  # the thread only exits early if the realtime session failed
         if not th.is_alive():
             log("realtime agent did not start - falling back to the greeting")
             agent = th = None
     if not th:
         route_when_ready()
-        log("speaking greeting")
-        play_wav(greeting)
+        if not instant_greeting:  # already played when the live agent started
+            log("speaking greeting")
+            play_wav(greeting)
 
-    gone = n = 0
+    gone = n = unmutes = 0
     dumped = clicked = False
     silence = CallerSilence()
     recorded = bool(recs)
@@ -282,6 +302,12 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 how = f"error {e}"
             log(f"hang-up requested -> clicked: {how}")
             clicked = True
+        try:
+            if page.evaluate(UNMUTE_JS):
+                unmutes += 1
+                log(f"WhatsApp had MUTED our mic ({time.time() - t0:.1f}s into the call) - clicked Unmute (#{unmutes})")
+        except Exception:
+            pass
         gone = 0 if call_active(page) else gone + 1
         if gone >= 6:
             break
@@ -385,6 +411,8 @@ def main():
         log(f"live engine libraries preloaded in {time.time() - t:.1f}s")
     greeting_wav = str(HERE / "greeting.wav")
     t = time.time()
+    global GREETING_SAID
+    GREETING_SAID = a.greeting
     synth_wav(a.greeting, greeting_wav)
     log(f"greeting pre-synthesized in {time.time() - t:.1f}s -> {greeting_wav}")
     with sync_playwright() as pw:

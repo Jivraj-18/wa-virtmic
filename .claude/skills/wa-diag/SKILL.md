@@ -61,6 +61,13 @@ start-up; repeated = bursty arrival).
   swap 3.4-3.7 GB, syscalls up to 529 ms. After Termux "Always allow in background" + closing apps + stopping the
   unused Termux:X11, the next real call had no stall (worst syscall 13 ms). The WhatsApp tab grows (~620 MB after 9 h,
   mostly swapped out) - a periodic idle reload of the page is a candidate fix (needs the user's OK).
+- **Other phone sees "muted", hears nothing / only some sentences** (2026-11-23): WhatsApp Web muted our mic by
+  itself mid-call (call UI dumps: "Mute microphone" at answer, "Unmute microphone" 18 s later; none of our code clicks
+  it). handle_call now clicks Unmute whenever it appears and logs `WhatsApp had MUTED our mic (Ns into the call)` -
+  grep for it. The call-active check also missed the muted state, so hang-ups weren't noticed; fixed.
+- **Incoming caller heard ~25 s of silence and hung up** (2026-11-23): GPT-Live only gets "greet when the call
+  connects" as an instruction and waited ~18 s, on top of a slow session start (6-7 s vs ~2 s). Incoming live calls
+  now play the recorded greeting (`greeting.wav`) as soon as Chrome's mic is up; the model is told it was said.
 - **Ruled out (tested, don't re-test)**: Python GIL / other threads (loop lag <= 75 ms during freezes); PulseAudio
   null sink running 2 s blocks (sink at 10 ms during freezes); opening new streams / resampling / pactl listings
   (no write blocking in an isolated test); Chrome consuming the mic (bench with and without: same); network (RTP loss
