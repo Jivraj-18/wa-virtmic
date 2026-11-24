@@ -141,13 +141,15 @@ def finish(call_dir: Path, log=print):
               f"caller asked for or was promised wasn't delivered, do it now and send it with `send`; (2) save "
               f"what's worth remembering about this person with `note` (who they are, what they wanted, preferences, "
               f"open follow-ups) - skip trivia; (3) if they wanted the owner or a call-back, `escalate`. Then reply "
-              f"with ONE line (max 20 words) summarising the call.")
+              f"with ONE line starting 'SUMMARY:' (max 20 words) saying what the caller wanted and what happened.")
     try:
         ok, text = asyncio.run(_claude(call_dir, prompt, log))
     except Exception as e:
         log(f"claude: wrap-up failed: {type(e).__name__}: {e}"); return
     if ok:
         m = json.loads((call_dir / "call_meta.json").read_text())
-        m["summary"] = text.strip().splitlines()[0][:200]
+        lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+        line = next((l for l in reversed(lines) if l.upper().startswith("SUMMARY:")), lines[-1] if lines else "")
+        m["summary"] = line.split(":", 1)[1].strip()[:200] if line.upper().startswith("SUMMARY:") else line[:200]
         (call_dir / "call_meta.json").write_text(json.dumps(m))
         log(f"call summary: {m['summary']}")
