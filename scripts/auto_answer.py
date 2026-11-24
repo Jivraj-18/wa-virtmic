@@ -381,8 +381,8 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 subprocess.run([sys.executable, str(HERE / "rms.py"), str(w)])
 
             t_tr = time.time()
-            try:   # one request for the whole call (see transcribe.call_segments)
-                lines = call_segments(str(ai_wav), str(caller_wav))
+            try:   # one request for the whole call, English (see transcribe.call_segments)
+                lines = call_segments(str(ai_wav), str(caller_wav), log)
             except Exception as e:
                 log(f"one-shot transcript failed ({type(e).__name__}: {e}) - falling back to per-utterance")
                 lines = []
