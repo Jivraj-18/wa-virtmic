@@ -294,6 +294,23 @@ def cmd_autojoin(a):
     return C.loop(once=a.once, start_join=start_join, busy=busy)
 
 
+def render_announcement(aid):
+    """Pre-record an announcement in Nova's voice so it plays instantly when she gets the floor."""
+    import speak
+    items = B.load_announcements()
+    for x in items:
+        if x.get("id") == aid:
+            out = B.ANNOUNCE.parent / "announce_audio" / f"{aid}.wav"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                speak.synth_wav(x["text"], str(out), engine="gateway", voice=os.environ.get("REALTIME_VOICE", "marin"))
+                x["audio"] = str(out)
+                print(f"recorded {out.name} in Nova's voice")
+            except Exception as e:
+                print(f"voice recording failed ({e}); Nova will speak it live instead")
+    B.save_announcements(items)
+
+
 def cmd_announce(a):
     items = B.load_announcements()
     if a.action == "add":
@@ -303,6 +320,11 @@ def cmd_announce(a):
                       "wait_for": a.wait_for, "raise_hand": not a.no_hand})
         B.save_announcements(items)
         print(f"queued {aid}: Nova will say it in the next meeting matching title={a.title!r} url={a.url!r}")
+        render_announcement(aid)
+    elif a.action == "render":   # (re)record the voice of pending announcements
+        for x in items:
+            if not x.get("done_at"):
+                render_announcement(x["id"])
     elif a.action == "rm":
         B.save_announcements([x for x in items if x.get("id") != a.id])
         print("removed", a.id)
@@ -340,7 +362,7 @@ def main():
     n = sub.add_parser("notes"); n.add_argument("target", nargs="?", default="latest")
     n.add_argument("--send", action="store_true"); n.set_defaults(fn=cmd_notes)
     an = sub.add_parser("announce", help="queue something Nova says once in a future meeting")
-    an.add_argument("action", choices=["add", "list", "rm"])
+    an.add_argument("action", choices=["add", "list", "rm", "render"])
     an.add_argument("text", nargs="?"); an.add_argument("--title", help="meeting title contains (case-insensitive)")
     an.add_argument("--url"); an.add_argument("--id"); an.add_argument("--after", type=float, default=120,
                                                                         help="seconds after joining (default 120)")

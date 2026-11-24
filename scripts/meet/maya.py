@@ -314,9 +314,24 @@ class Maya:
             return
         fl["spoken"] = True
         self.last_trigger = time.time()
-        self.event("announcement", id=fl["x"].get("id"), to=speaker, text=fl["x"]["text"])
+        x = fl["x"]
+        wav = Path(x.get("audio") or "")
+        self.event("announcement", id=x.get("id"), to=speaker, text=x["text"], prerecorded=wav.is_file())
+        if wav.is_file():
+            # pre-recorded in Nova's voice when queued: starts instantly (the model took ~7 s for a long text)
+            import wave
+            with wave.open(str(wav)) as w:
+                dur = w.getnframes() / w.getframerate()
+            self.play_until = time.time() + dur
+            await asyncio.create_subprocess_exec("paplay", f"--device={self.agent.out_device}", str(wav))
+            self._remember(f"[{NAME} said] {x['text']}")
+            await self.inject(f"[You ({NAME}) just said this to the meeting, after {speaker or 'someone'} gave you the "
+                              f"floor]: {x['text']}")
+            self.last_exchange = (cue, x["text"])
+            self.followup_until = self.play_until + FOLLOWUP_S
+            return
         await self.agent.respond(ANNOUNCE_PROMPT.format(who=speaker or "the meeting", cue=cue.replace('"', "'")[:120],
-                                                        text=fl["x"]["text"].replace('"', "'")))
+                                                        text=x["text"].replace('"', "'")))
 
     async def on_chat(self, sender, text):
         if sender.strip().lower() in ("you", NAME.lower()):

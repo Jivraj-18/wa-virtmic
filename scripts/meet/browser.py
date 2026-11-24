@@ -312,8 +312,28 @@ async def in_meeting(page) -> bool:
         return False
 
 
+def chat_chunks(text, limit=450):
+    """Meet chat messages are capped (~500 chars): split long text at sentence ends."""
+    parts, cur = [], ""
+    for sent in re.split(r"(?<=[.!?])\s+", text.strip()):
+        if cur and len(cur) + 1 + len(sent) > limit:
+            parts.append(cur); cur = sent
+        else:
+            cur = f"{cur} {sent}".strip()
+    if cur:
+        parts.append(cur)
+    return [p[:limit] for p in parts]
+
+
 async def send_chat(page, text, log=print) -> bool:
-    text = text.strip()[:450]
+    chunks = chat_chunks(text)
+    if len(chunks) > 1:
+        ok = True
+        for c in chunks:
+            ok = await send_chat(page, c, log) and ok
+            await page.wait_for_timeout(600)
+        return ok
+    text = chunks[0] if chunks else ""
     box = page.locator(CHAT_BOX)
     if not (await box.count() and await box.first.is_visible()):
         await _click(page.get_by_role("button", name=RX["chat"]))
@@ -335,12 +355,29 @@ async def raise_hand(page, up=True) -> bool:
         return True            # already in that state
     await _click(page.get_by_role("button", name=other), timeout=5000)
     await page.wait_for_timeout(800)
+    if await page.get_by_role("button", name=want).count():
+        return True
+    # Playwright clicks often time out on the heavy Meet page on the phone: click in the page instead
+    await js_click(page, other.pattern)
+    await page.wait_for_timeout(1200)
     return await page.get_by_role("button", name=want).count() > 0
+
+
+async def js_click(page, pattern: str) -> bool:
+    """Click the first visible button whose aria-label matches `pattern` (case-insensitive) from inside the page."""
+    try:
+        return await page.evaluate("""(p) => { const rx = new RegExp(p, 'i');
+            const b = [...document.querySelectorAll('button')].find(b => b.getBoundingClientRect().width > 0 &&
+                                                                     rx.test(b.getAttribute('aria-label') || ''));
+            if (b) { b.click(); return true; } return false; }""", pattern)
+    except Exception:
+        return False
 
 
 async def leave_meet(page):
     await dismiss_dialogs(page)
-    await _click(page.get_by_role("button", name=RX["leave"]))
+    if not await _click(page.get_by_role("button", name=RX["leave"])):
+        await js_click(page, RX["leave"].pattern)
 
 
 async def probe(page):

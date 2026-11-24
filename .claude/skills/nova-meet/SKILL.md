@@ -19,6 +19,8 @@ aria-labels (`status`, `probe --text`); take a screenshot only if a text probe c
 | Autojoin service | `bash scripts/nova/autojoin.sh start\|stop\|status` (log `~/.cache/nova/autojoin.log`) |
 | Notes of the last meeting | `python scripts/nova/nova.py notes latest [--send]`; past meetings: `nova.py meetings` |
 | Chrome up/down | `python scripts/nova/nova.py chrome up\|down` (graceful SIGTERM, never -9) |
+| Queue something Nova says in a future meeting | `python scripts/nova/nova.py announce add "<text>" --title "<title words>" --wait-for "<person>"` (also `list`, `rm --id`, `render`) |
+| What will Nova join? | `cat ~/.cache/nova/plan.txt` (rewritten every Calendar refresh; also in `status`) |
 
 Before joining any REAL meeting, tell the user. Name: `MAYA_NAME` (default Nova; spellings incl. Hindi नोवा in
 `scripts/meet/addressing.py` VARIANTS). Old docs/code say "Maya" (experiment E4) - same agent.
@@ -43,6 +45,23 @@ Before joining any REAL meeting, tell the user. Name: `MAYA_NAME` (default Nova;
   time, each event once (3 tries; `~/.cache/nova/autojoined.json`). Which events: `~/.config/nova/autojoin.json`
   `mode` = `tagged` (default: title/description contains `keyword` "nova" or invites one of `accounts`) or `all`.
   While gws is on the user's PERSONAL calendar keep `tagged`, or every meeting of theirs gets joined.
+
+## Announcements (owner's queue, `~/.config/nova/announce.json`)
+Each item is said ONCE in the next meeting whose title contains `title`: after `after_s`, when `wait_for` (a name,
+matched against Meet tiles/caption speakers) is in the call and the room is quiet, Nova RAISES HER HAND and waits;
+when that person gives her the floor (her name, or a go-ahead judged by a small LLM: "yes", "go ahead", "haan
+bolo"), she plays the pre-recorded text (`announce render`; TTS in her voice, starts instantly - the live model took
+~7 s for a 48 s text), lowers the hand, posts the text in chat (split at 450 chars) and marks it done. The queue is
+re-read every 5 s during a meeting. Rehearse in a test meeting with `--title "<test title>" --wait-for <you>`.
+
+## Lessons from the first real Meet (2026-11-24)
+- Mic: CDP permission overrides vanish when the CDP connection that set them closes (every status/probe!) -> Meet
+  shows "Microphone problem"/"Permission needed" and captures nothing. Fixed for good by `allow_meet_media()`: a
+  site setting in the profile's Preferences, written at Chrome launch. Check capture: `pactl list short
+  source-outputs` must show a Chrome stream on `maya_mic`.
+- Playwright clicks time out on the heavy Meet page: `js_click()` (click from inside the page) as fallback.
+- Meet's page may not fire "load" in 30 s: join waits for the pre-join controls instead.
+- A Chrome that ran for hours with killed tests stopped capturing at all: `nova.py chrome down` + `up` fixed it.
 
 ## Google login (Nova's Chrome)
 Account in use: the user's personal one until Nova's own is unlocked (Meet shows that account's name, not "Nova").
