@@ -1,64 +1,102 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>wa-virtmic</title>
-<meta name="description" content="An AI voice answering WhatsApp calls through a virtual microphone, inside a GitHub Codespace: experiments and results.">
-<link rel="stylesheet" href="style.css">
-<script src="app.js"></script>
-<script src="cards/E0.js"></script><script src="cards/E1.js"></script><script src="cards/E2.js"></script>
-<script src="cards/E3.js"></script><script src="cards/E4.js"></script><script src="cards/E5.js"></script>
-<script src="cards/E6.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wa-virtmic: how it works</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1d1d1f; --muted:#5f6368; --line:#e3e3e8; --card:#f7f7f9; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111214; --fg:#e8e8ea; --muted:#a0a3a8; --line:#2c2e33; --card:#1a1b1e; --accent:#7aa2ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 30px; margin: 0 0 6px; }
+  h2 { font-size: 22px; margin: 56px 0 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+  p.lead { color: var(--muted); margin: 0 0 18px; font-size: 17px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  nav a { color: var(--accent); text-decoration: none; margin-right: 16px; font-size: 15px; }
+  .diagram { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+  ul.notes { margin: 12px 0 0; padding-left: 20px; }
+  ul.notes li { margin: 4px 0; }
+  ol.steps { padding-left: 22px; } ol.steps li { margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; margin-top: 8px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; }
+  code { font: 13.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--card); padding: 1px 5px; border-radius: 4px; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:1px 8px; border-radius:999px; white-space:nowrap; }
+  .done { background:#dcfce7; color:#166534; } .partial { background:#fef3c7; color:#92400e; } .todo { background:#e5e7eb; color:#374151; }
+  @media (prefers-color-scheme: dark) { .done{background:#14532d;color:#bbf7d0} .partial{background:#78350f;color:#fde68a} .todo{background:#374151;color:#e5e7eb} }
+  a { color: var(--accent); }
+</style>
 </head>
 <body>
-<div class="wrap">
-  <nav class="top"><strong>wa-virtmic</strong><span class="sep">|</span><a href="https://github.com/Jivraj-18/wa-virtmic">GitHub repo</a></nav>
-  <h1>An AI voice that answers WhatsApp calls</h1>
-  <p class="lede">WhatsApp Web runs in a normal Chrome browser inside a cloud dev container (GitHub Codespace).
-    We replace that browser's microphone and speaker with virtual audio devices, so an AI voice model can hear the caller
-    and talk back on a real WhatsApp call, with no phone and no telephony provider.</p>
+<main>
+  <h1>An AI voice on WhatsApp calls and Google Meet</h1>
+  <p class="lead">Everything runs in one GitHub Codespace. A real Chrome browser joins the call, virtual audio devices act as its
+    microphone and speaker, and a realtime voice model listens and talks through them. No WhatsApp Business account and no phone
+    number provider are needed.</p>
+  <nav><a href="#diagram">The diagram</a><a href="#steps">The 8 steps in words</a><a href="#maya">Maya on Meet</a><a href="#experiments">What each experiment added</a></nav>
 
-  <h2>How it works</h2>
-  <div class="panel diagram">
-    <svg viewBox="0 0 900 285" role="img" aria-label="Architecture: caller's phone to WhatsApp Web in Chrome, PulseAudio virtual devices, voice agent, LLM gateway">
-      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" opacity=".6"/></marker></defs>
-      <rect class="box" x="10" y="110" width="130" height="70" rx="10"/>
-      <text class="lbl" x="75" y="140" text-anchor="middle">Caller's phone</text><text class="sub" x="75" y="160" text-anchor="middle">WhatsApp app</text>
-      <rect class="box" x="190" y="40" width="250" height="210" rx="12"/>
-      <text class="lbl" x="315" y="64" text-anchor="middle">GitHub Codespace</text>
-      <rect class="hl" x="210" y="80" width="210" height="52" rx="8"/>
-      <text class="lbl" x="315" y="102" text-anchor="middle">Chrome + WhatsApp Web</text><text class="sub" x="315" y="120" text-anchor="middle">headed, on a noVNC desktop</text>
-      <rect class="box" x="210" y="160" width="100" height="70" rx="8"/>
-      <text class="lbl" x="260" y="186" text-anchor="middle">virtmic</text><text class="sub" x="260" y="204" text-anchor="middle">Chrome's mic</text><text class="sub" x="260" y="219" text-anchor="middle">(virtual)</text>
-      <rect class="box" x="320" y="160" width="100" height="70" rx="8"/>
-      <text class="lbl" x="370" y="186" text-anchor="middle">callout_sink</text><text class="sub" x="370" y="204" text-anchor="middle">Chrome's speaker</text><text class="sub" x="370" y="219" text-anchor="middle">(virtual)</text>
-      <rect class="hl" x="500" y="120" width="170" height="90" rx="10"/>
-      <text class="lbl" x="585" y="150" text-anchor="middle">Voice agent</text><text class="sub" x="585" y="170" text-anchor="middle">realtime_agent.py</text><text class="sub" x="585" y="187" text-anchor="middle">auto_answer.py (CDP)</text>
-      <rect class="box" x="730" y="110" width="160" height="110" rx="10"/>
-      <text class="lbl" x="810" y="140" text-anchor="middle">Voice model</text><text class="sub" x="810" y="160" text-anchor="middle">OpenAI gpt-realtime</text><text class="sub" x="810" y="178" text-anchor="middle">key via an OpenAI-</text><text class="sub" x="810" y="194" text-anchor="middle">compatible LLM gateway</text>
-      <path class="ln" d="M140,145 C165,145 180,106 208,106" marker-end="url(#ar)" marker-start="url(#ar)"/>
-      <text class="sub" x="20" y="100">WebRTC call</text>
-      <path class="ln c" d="M370,132 L370,158" marker-end="url(#ar)"/>
-      <path class="ln a" d="M260,158 L260,132" marker-end="url(#ar)"/>
-      <path class="ln c" d="M420,200 C460,200 470,180 498,180" marker-end="url(#ar)"/>
-      <text class="sub" x="430" y="222">caller audio</text>
-      <path class="ln a" d="M585,212 L585,272 L260,272 L260,234" marker-end="url(#ar)"/>
-      <text class="sub" x="455" y="266">AI voice</text>
-      <path class="ln" d="M670,165 L728,165" marker-end="url(#ar)" marker-start="url(#ar)"/>
-      <text class="sub" x="676" y="157">WebSocket</text>
-    </svg>
-  </div>
-  <p class="note">Caller audio leaves Chrome through the virtual speaker and is streamed to the voice model. The model's
-    spoken reply is played into the virtual sink that Chrome uses as its microphone. A Chrome DevTools Protocol (CDP)
-    script clicks <em>Accept</em> on incoming calls. For testing, E0 swaps the phone for a simulated TTS caller.</p>
+  <h2 id="diagram">The whole system on one page</h2>
+  <p class="sub">Three areas, left to right: the people on the call, our Codespace, and the cloud AI services. Follow the numbers.
+    Line colours show the kind of connection. <a href="architecture.svg">Open full size</a> ·
+    <a href="architecture.drawio">draw.io source</a> (open it in draw.io / diagrams.net to edit).</p>
+  <a href="architecture.svg"><img src="architecture.svg" alt="Architecture diagram: caller's phone, Chrome with WhatsApp Web and Meet tabs, Playwright, PulseAudio fake mic and speaker, voice bridge, company LLM gateway for a temporary key, and a direct WebSocket to OpenAI Realtime" style="width:100%;border:1px solid var(--line);border-radius:10px;background:#fff"></a>
 
-  <h2>Experiments</h2>
-  <div id="cards" class="cards"></div>
-  <script>renderCards(document.getElementById("cards"));</script>
+  <h2 id="steps">The 8 steps in plain words</h2>
+  <ol class="steps">
+    <li><b>Someone calls</b> our WhatsApp number from a normal phone. The call arrives in a <b>real Chrome window</b> running WhatsApp Web inside the Codespace (WebRTC, end-to-end encrypted; we never touch that traffic).</li>
+    <li><b>Playwright spots the call and answers.</b> It looks at the WhatsApp page every 0.5 s, the way a person would, for an "Accept" button, and clicks it. It talks to Chrome over CDP (Chrome DevTools Protocol), a local connection inside the Codespace.</li>
+    <li><b>Chrome plays the call into a fake speaker.</b> PulseAudio gives Chrome a pretend speaker (<code>callout_sink</code>) and a pretend microphone (<code>virtmic</code>).</li>
+    <li><b>The voice bridge picks up the caller's voice</b> from the fake speaker as raw audio, and records it.</li>
+    <li><b>It asks the company LLM gateway for a temporary OpenAI key.</b> This is one ordinary HTTPS request at the start of each call. The gateway can't carry a WebSocket, so this key is the only thing it provides.</li>
+    <li><b>It opens a WebSocket directly to OpenAI</b> (<code>wss://api.openai.com</code>, model <code>gpt-realtime</code>) using that key. <b>This connection does not go through the gateway.</b> The caller's audio streams up and the AI's voice streams back down, live, for the whole call.</li>
+    <li><b>The AI's voice goes into the fake microphone.</b> If the caller starts talking over the AI, the bridge cuts the AI off.</li>
+    <li><b>Chrome sends the fake-mic audio into the call</b>, so the caller hears the AI. The reply starts about 1.3 s after the caller stops talking. When the call ends, both sides and a transcript are saved, and a summary is written by <code>gpt-4.1-mini</code> through the gateway (plain HTTPS).</li>
+  </ol>
 
-  <footer>All audio on this site comes from <strong>simulated</strong> calls (TTS caller, E0 harness). No real call
-    recordings, transcripts or contact details are published.</footer>
-</div>
+  <h2 id="maya">Maya on Google Meet: what's different</h2>
+  <ul class="notes">
+    <li><b>Same pipes:</b> Chrome opens a Meet tab instead of WhatsApp, with the same fake mic and speaker and the same direct WebSocket to <code>gpt-realtime</code>.</li>
+    <li><b>Joining:</b> Playwright clicks Join and turns on captions. Meet refuses guests from a cloud machine, so Maya uses her own Google account, signed in once by hand.</li>
+    <li><b>Only speaks when named:</b> the model hears everything, but its auto-reply is switched off. Our code replies only when someone says "Maya, …", and stops her within about 0.2 s if someone talks over her.</li>
+    <li><b>Knows who said what:</b> Playwright reads Meet's captions (which carry speaker names) and the chat every 1.5 s, and passes them to the model as text.</li>
+    <li><b>Chat tips:</b> every few minutes <code>gpt-4.1-mini</code> (via the gateway, HTTPS) suggests a short tip, and Playwright types it into the Meet chat.</li>
+  </ul>
+
+  <!-- ============================================================ 4 -->
+  <h2 id="experiments">What each experiment added</h2>
+  <table>
+    <thead><tr><th>#</th><th>What it adds</th><th>How it works</th><th>Models / protocol</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>E0</td><td>A fake caller, so we can test without a real phone call</td>
+        <td>Speaks scripted lines with TTS into the agent's input, records the reply, measures latency and barge-in</td>
+        <td>edge-tts; same realtime agent</td><td><span class="tag done">Done</span></td></tr>
+      <tr><td>E1</td><td>Call-center mode from a folder you edit</td>
+        <td><code>callcenter.py start --context DIR</code> builds instructions from your files on every call; writes <code>summary.md</code> after the call</td>
+        <td>gpt-realtime (call); gpt-4.1-mini over HTTPS (summary)</td><td><span class="tag done">Done (sim)</span></td></tr>
+      <tr><td>E2</td><td>"Hold on, let me check": looks things up mid-call</td>
+        <td>Model calls tools: search files (ripgrep), read a file, or ask a background agent (<code>claude -p</code>). Says a holding line while waiting</td>
+        <td>Realtime function calling; Claude Code headless as a subprocess; gateway fallback</td><td><span class="tag done">Done (sim)</span></td></tr>
+      <tr><td>E3</td><td>Model comparison (speed, Hindi, cost)</td>
+        <td>Same E0 scripts against several voice backends</td>
+        <td>Planned: newer gpt-realtime, Gemini Live, HTTP-only fallback</td><td><span class="tag todo">Not started</span></td></tr>
+      <tr><td>E4</td><td>Maya, a Google Meet participant</td>
+        <td>See "Maya on Google Meet" above</td>
+        <td>gpt-realtime; gpt-4.1-mini for chat tips</td><td><span class="tag partial">Real Meet tested</span></td></tr>
+      <tr><td>E5</td><td>Plays audio on request: files or a generated podcast</td>
+        <td>A pausable player writes into the same virtual mic. It pauses when the caller speaks. Podcast scripts are written and voiced line by line</td>
+        <td>gpt-4.1-mini (script), gpt-4o-mini-tts (two voices)</td><td><span class="tag done">Done (sim)</span></td></tr>
+      <tr><td>E6</td><td>One-command setup for demos</td>
+        <td><code>make demo</code>, <code>make doctor</code> (health check), auto-install on container rebuild; Windows notes (WhatsApp Desktop + VB-Cable)</td>
+        <td>n/a</td><td><span class="tag done">Done</span> <span class="tag todo">Windows untested</span></td></tr>
+    </tbody>
+  </table>
+  <p class="sub" style="margin-top:14px">Details and numbers for each experiment: <code>experiments/&lt;ID&gt;/RESULTS.md</code> in the
+    <a href="https://github.com/Jivraj-18/wa-virtmic">repository</a>.</p>
+</main>
+
 </body>
 </html>
