@@ -10,6 +10,7 @@
     python scripts/nova/nova.py notes [latest|<dir>] [--send]   # meeting notes (notes.py)
     python scripts/nova/nova.py announce add "<text>" --title "<words in the title>" --wait-for "<person>"
                                                    # raises hand once that person is there, speaks when given the floor
+    python scripts/nova/nova.py work list|add "<task>"|show <id>|cancel <id>   # Nova's work queue
     python scripts/nova/nova.py meetings           # past meetings (folders under ~/nova_meetings)
     python scripts/nova/nova.py chrome up|down     # start / gracefully stop Nova's Chrome (CDP 9333, display :97)
 
@@ -337,6 +338,14 @@ def cmd_announce(a):
             print("no announcements")
 
 
+def cmd_work(a):
+    """Nova's work queue (scripts/nova/task.py)."""
+    args = [sys.executable, str(HERE / "task.py"), a.action] + a.rest
+    if a.action == "add":
+        args = [sys.executable, str(HERE / "task.py"), "add", "--task", " ".join(a.rest), "--requester", "owner (CLI)"]
+    return subprocess.call(args)
+
+
 def cmd_notes(a):
     cmd = [sys.executable, str(HERE / "notes.py"), "make", a.target] + (["--send"] if a.send else [])
     return subprocess.call(cmd)
@@ -370,6 +379,9 @@ def main():
     an.add_argument("--wait-for", help="only when this person is in the call, and they must give Nova the floor")
     an.add_argument("--no-hand", action="store_true", help="speak when quiet instead of raising the hand first")
     an.set_defaults(fn=cmd_announce)
+    w = sub.add_parser("work", help="Nova's work queue: list | add <task> | show <id> | cancel <id> | worker")
+    w.add_argument("action", choices=["list", "add", "show", "cancel", "worker"]); w.add_argument("rest", nargs="*")
+    w.set_defaults(fn=cmd_work)
     m = sub.add_parser("meetings"); m.add_argument("-n", type=int, default=10); m.set_defaults(fn=cmd_meetings)
     c = sub.add_parser("chrome"); c.add_argument("action", choices=["up", "down"]); c.set_defaults(fn=cmd_chrome)
     a = ap.parse_args()

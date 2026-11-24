@@ -1,8 +1,14 @@
-"""Nova's work desk: a task given in a meeting runs here, DETACHED from the meeting (Nova keeps listening/talking).
+"""Nova's work queue: tasks given to Nova (in a meeting or from the CLI) are stored and done one at a time,
+DETACHED from the meeting (Nova keeps listening/talking).
 
-    python scripts/nova/task.py run --task "<what to do>" --requester "<name>" --meeting-url <url> [--title T]
-    python scripts/nova/task.py list                 # recent tasks and their state
+    python scripts/nova/task.py add --task "<what to do>" [--requester NAME] [--meeting-url URL] [--title T]
+    python scripts/nova/task.py list [-n 15]         # queued / active / question / done / failed
     python scripts/nova/task.py show <id>            # log + result of one task
+    python scripts/nova/task.py cancel <id>          # drop a queued task
+    python scripts/nova/task.py worker               # process the queue (started automatically by `add`)
+
+Queue: ~/nova_work/queue.json (one entry per task, oldest first), work folders ~/nova_work/<id>/. One worker at a
+time (pid lock), so two tasks never edit the same repo at once. Her memory = done/failed entries + projects.json.
 
 Claude Code (`claude -p`) does the work in its own folder ~/nova_work/<id>/ with git, gh (GitHub, incl. Pages),
 curl, file edits and web search. GitHub auth: GH_TOKEN from ~/.config/nova/github_token (600, outside the repo).
@@ -70,30 +76,132 @@ def gh_user(env) -> str:
     return r.stdout.strip() or "unknown"
 
 
-def run(a):
-    tid = time.strftime("%Y%m%d_%H%M%S")
+QUEUE = WORK / "queue.json"
+WORKER_PID = WORK / "worker.pid"
+
+
+def _locked(fn):
+    """Run fn(queue_list) -> result under an exclusive lock on the queue file; fn may modify the list in place."""
+    import fcntl
+    WORK.mkdir(parents=True, exist_ok=True)
+    with open(WORK / "queue.lock", "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            q = json.loads(QUEUE.read_text())
+        except Exception:
+            q = []
+        out = fn(q)
+        tmp = QUEUE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(q, indent=1, ensure_ascii=False))
+        tmp.replace(QUEUE)
+        return out
+
+
+def load_queue() -> list:
+    try:
+        return json.loads(QUEUE.read_text())
+    except Exception:
+        return []
+
+
+def enqueue(task, requester="", meeting_url="", title="", context="", start_worker=True) -> dict:
+    item = {"id": time.strftime("%Y%m%d_%H%M%S") + f"_{os.getpid() % 1000:03d}", "task": task.strip(),
+            "requester": requester, "meeting_url": meeting_url, "title": title, "context": context[-4000:],
+            "state": "queued", "created": time.time()}
+    def add(q):
+        import difflib
+        for x in q[::-1]:   # the voice sometimes asks twice for the same thing: merge near-duplicates
+            if x["state"] in ("queued", "active") and x.get("requester") == requester and \
+                    time.time() - x["created"] < 120 and \
+                    difflib.SequenceMatcher(None, x["task"].lower(), item["task"].lower()).ratio() > 0.6:
+                return x
+        q.append(item)
+        return item
+    got = _locked(add)
+    if got is not item:
+        return dict(got, duplicate=True)
+    if start_worker:
+        ensure_worker()
+    return item
+
+
+def update(tid, **kw):
+    def f(q):
+        for x in q:
+            if x["id"] == tid:
+                x.update(kw)
+                return x
+    return _locked(f)
+
+
+def worker_alive() -> bool:
+    try:
+        os.kill(int(WORKER_PID.read_text()), 0)
+        return True
+    except Exception:
+        return False
+
+
+def ensure_worker():
+    if worker_alive():
+        return
+    logf = open(Path.home() / ".cache" / "nova" / "tasks.log", "ab")
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "worker"], stdout=logf, stderr=logf,
+                     stdin=subprocess.DEVNULL, start_new_session=True)
+
+
+def worker(a=None):
+    if worker_alive():
+        print("worker already running"); return
+    WORKER_PID.write_text(str(os.getpid()))
+    try:
+        # an 'active' left over from a crashed worker goes back to the queue
+        _locked(lambda q: [x.update(state="queued") for x in q if x["state"] == "active"])
+        while True:
+            def take(q):
+                for x in q:
+                    if x["state"] == "queued":
+                        x.update(state="active", started=time.time())
+                        return dict(x)
+            item = _locked(take)
+            if not item:
+                return
+            try:
+                do_task(item)
+            except Exception as e:
+                update(item["id"], state="failed", finished=time.time(),
+                       result={"say": f"I hit an internal error on that task ({type(e).__name__}).", "ok": False})
+    finally:
+        if WORKER_PID.exists() and WORKER_PID.read_text() == str(os.getpid()):
+            WORKER_PID.unlink()
+
+
+def past_text(n=8) -> str:
+    rows = [x for x in load_queue() if x["state"] in ("done", "failed", "question")][-n:]
+    return "\n".join(f"- {x['id'][:13]} [{x['state']}] {x['task'][:120]} -> {x.get('result', {}).get('say', '')[:150]}"
+                     for x in rows) or "(none yet)"
+
+
+def do_task(item):
+    tid = item["id"]
     d = WORK / tid
     d.mkdir(parents=True, exist_ok=True)
-    meta = {"id": tid, "task": a.task, "requester": a.requester, "meeting_url": a.meeting_url, "title": a.title,
-            "state": "running", "started": time.time()}
-    (d / "task.json").write_text(json.dumps(meta, indent=1))
-    env = dict(os.environ)
+    env = gh_env()
     env.pop("BUN_OPTIONS", None)
-    if TOKEN.exists():
-        env["GH_TOKEN"] = TOKEN.read_text().strip()
     user = gh_user(env)
-    log(d, f"task from {a.requester}: {a.task!r} (GitHub user {user})")
+    log(d, f"task from {item['requester']}: {item['task']!r} (GitHub user {user})")
     exe = shutil.which("claude")
     cmd = [exe, "-p", "--output-format", "json", "--model", MODEL, "--permission-mode", "acceptEdits",
-           "--append-system-prompt", ROLE.format(name=NAME, requester=a.requester or "a teammate", gh_user=user,
-                                                 projects=projects_text(), context=(a.context or "(none)")[-4000:]),
+           "--append-system-prompt", ROLE.format(name=NAME, requester=item["requester"] or "a teammate", gh_user=user,
+                                                 projects=projects_text() + "\nRecent tasks:\n" + past_text(),
+                                                 context=(item.get("context") or "(none)")[-4000:]),
            "--allowedTools", "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,"
                              "Bash(git:*),Bash(gh:*),Bash(curl:*),Bash(ls:*),Bash(mkdir:*),Bash(cat:*),Bash(cp:*),Bash(mv:*)",
            "--disallowedTools", "Task,Agent,NotebookEdit"]
     t0 = time.time()
     try:
-        p = subprocess.run(cmd, input=f"Task from {a.requester}: {a.task}", capture_output=True, text=True, cwd=d,
-                           env=env, timeout=TIMEOUT)
+        p = subprocess.run(cmd, input=f"Task from {item['requester'] or 'a teammate'}: {item['task']}",
+                           capture_output=True, text=True, cwd=d, env=env, timeout=TIMEOUT)
         out = p.stdout
     except subprocess.TimeoutExpired:
         out = json.dumps({"result": json.dumps({"say": "I ran out of time on that task; I'll need more time.",
@@ -106,12 +214,14 @@ def run(a):
         res = {"say": "I ran into a problem with that task.", "chat": "", "ok": False}
         log(d, f"could not parse the result: {e}; raw: {out[-500:]!r}")
     state = "question" if (res.get("question") or "").strip() else ("done" if res.get("ok") else "failed")
-    meta.update(state=state, finished=time.time(), result=res)
-    if state == "done" and (res.get("repo") or res.get("url")):
-        remember_project(meta, res)
+    meta = dict(item, state=state, finished=time.time(), result=res)
+    update(tid, state=state, finished=meta["finished"], result=res)
     (d / "task.json").write_text(json.dumps(meta, indent=1))
-    log(d, f"{meta['state']} in {time.time() - t0:.0f}s: {res}")
-    queue_report(meta, res, d)
+    if state == "done" and res.get("repo"):
+        remember_project(meta, res)
+    log(d, f"{state} in {time.time() - t0:.0f}s: {res}")
+    if item.get("meeting_url"):
+        queue_report(meta, res, d)
 
 
 def projects_text() -> str:
@@ -175,26 +285,45 @@ def queue_report(meta, res, d):
 
 
 def cmd_list(a):
-    for d in sorted(WORK.glob("2*"))[-a.n:]:
-        try:
-            m = json.loads((d / "task.json").read_text())
-        except Exception:
-            continue
-        dur = f"{(m.get('finished') or time.time()) - m['started']:.0f}s"
-        print(f"{m['id']}  {m['state']:7} {dur:>6}  from {m.get('requester')}: {m['task'][:80]}")
-        if m.get("result", {}).get("chat"):
-            print(f"      chat: {m['result']['chat'][:150]}")
+    q = load_queue()
+    if not q:
+        print("queue empty")
+    for x in q[-a.n:]:
+        end = x.get("finished") or time.time()
+        dur = f"{end - x.get('started', end):.0f}s" if x.get("started") else "-"
+        print(f"{x['id']}  {x['state']:8} {dur:>6}  from {x.get('requester') or '-'}: {x['task'][:90]}")
+        r = x.get("result") or {}
+        if r.get("chat") or r.get("question"):
+            print(f"      {'question' if r.get('question') else 'links'}: {(r.get('question') or r.get('chat'))[:160]}")
+    print(f"worker: {'running' if worker_alive() else 'idle'}")
+
+
+def cmd_add(a):
+    x = enqueue(a.task, a.requester, a.meeting_url, a.title, a.context)
+    print(f"queued {x['id']} (worker {'running' if worker_alive() else 'started'})")
+
+
+def cmd_cancel(a):
+    def f(q):
+        for x in q:
+            if x["id"] == a.id and x["state"] == "queued":
+                x.update(state="cancelled", finished=time.time())
+                return True
+    print("cancelled" if _locked(f) else "not found or not queued (only queued tasks can be cancelled)")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run"); r.add_argument("--task", required=True); r.add_argument("--requester", default="")
-    r.add_argument("--meeting-url", default=""); r.add_argument("--title", default="")
-    r.add_argument("--context", default="", help="recent meeting lines (who said what)"); r.set_defaults(fn=run)
-    l = sub.add_parser("list"); l.add_argument("-n", type=int, default=10); l.set_defaults(fn=cmd_list)
-    s = sub.add_parser("show"); s.add_argument("id")
-    s.set_defaults(fn=lambda a: print((WORK / a.id / "task.log").read_text(), (WORK / a.id / "task.json").read_text()))
+    for name in ("add", "run"):   # "run" = old name, same as add
+        r = sub.add_parser(name); r.add_argument("--task", required=True); r.add_argument("--requester", default="")
+        r.add_argument("--meeting-url", default=""); r.add_argument("--title", default="")
+        r.add_argument("--context", default="", help="recent meeting lines (who said what)"); r.set_defaults(fn=cmd_add)
+    l = sub.add_parser("list"); l.add_argument("-n", type=int, default=15); l.set_defaults(fn=cmd_list)
+    s_ = sub.add_parser("show"); s_.add_argument("id")
+    s_.set_defaults(fn=lambda a: print((WORK / a.id / "task.log").read_text()))
+    c = sub.add_parser("cancel"); c.add_argument("id"); c.set_defaults(fn=cmd_cancel)
+    sub.add_parser("worker").set_defaults(fn=worker)
     a = ap.parse_args()
     a.fn(a)
 

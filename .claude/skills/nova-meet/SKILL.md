@@ -66,8 +66,12 @@ re-read every 5 s during a meeting. Rehearse in a test meeting with `--title "<t
   "In-call messages are available in Google Chat to invited users who are in the host's organization"). send_chat
   detects it and returns False; Nova then says so and reads links out (`speakable_url`). Fix for real: org allows
   external chat, or Nova's account is inside the org. Read the panel: `nova.py probe --text`.
-- Tasks: `python scripts/nova/task.py list` / `show <id>`; work folders `~/nova_work/<id>/`; who may give tasks:
-  `~/.config/nova/tasks.json`; what Nova built: `~/.config/nova/projects.json`.
+- Work queue: `python scripts/nova/nova.py work list | add "<task>" | show <id> | cancel <id>`. Store
+  `~/nova_work/queue.json` (queued -> active -> done/failed/question), one worker at a time (auto-started), work
+  folders `~/nova_work/<id>/`. Tasks from meetings come in via the voice's do_task tool (near-duplicates within 2 min
+  are merged); results are announced in the same meeting (or the next one with the same link). Her memory each
+  meeting = queue + `~/.config/nova/projects.json` (repos that still exist). Who may give tasks:
+  `~/.config/nova/tasks.json`. Queue work for Nova outside meetings with `work add`.
 - Memory: the phone had 170 MB free / swap nearly full during a test -> "voice breaking up". Close other apps;
   check `free -m` (want > 1 GB available) before important meetings.
 - A Chrome that ran for hours with killed tests stopped capturing at all: `nova.py chrome down` + `up` fixed it.
