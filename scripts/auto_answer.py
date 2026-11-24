@@ -418,7 +418,10 @@ def main():
     t = time.time()
     global GREETING_SAID
     GREETING_SAID = a.greeting
-    synth_wav(a.greeting, greeting_wav)
+    # same voice as the live AI, or callers hear the voice change after the greeting ("your voice just changed")
+    voice = (os.environ.get("LIVE_VOICE", "marin") if os.environ.get("VOICE_ENGINE", "realtime") == "live"
+             else os.environ.get("REALTIME_VOICE", "marin"))
+    synth_wav(a.greeting, greeting_wav, voice=voice)
     log(f"greeting pre-synthesized in {time.time() - t:.1f}s -> {greeting_wav}")
     with sync_playwright() as pw:
         b = pw.chromium.connect_over_cdp("http://localhost:9222")
