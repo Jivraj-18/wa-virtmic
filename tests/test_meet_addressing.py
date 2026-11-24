@@ -33,7 +33,8 @@ def test_nova_hindi_and_isolation():
     assert is_addressed("नोवा जी, summary दो", "Nova")
     assert is_addressed("okay Nova, what did we decide?", "Nova")
     assert not is_addressed("Maya, what do you think?", "Nova")       # old name no longer triggers
-    assert not is_addressed("Noah, can you share your screen?", "Nova")
+    assert is_addressed("Hi Noah, can you hear me?", "Nova")      # Meet captions spell Nova as Noah
+    assert is_addressed("Oh, hi, Noah! Can you hear me?", "Nova")
     assert not is_addressed("the supernova demo went well", "Nova")
 
 

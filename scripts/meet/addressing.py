@@ -14,11 +14,13 @@ from functools import lru_cache
 
 AGENT_NAME = os.environ.get("MAYA_NAME", "Nova")
 # Latin spellings + how STT writes the name in Hindi (Devanagari) and Urdu script when people speak Hindi/Hinglish.
-# Look-alikes are only ones STT really produces for the name; real other names (Noah, Neha) must NOT be here.
+# Look-alikes are only ones STT really produces for the name. "noah": Google Meet's captions AND gpt-4o-transcribe
+# wrote "Hi Nova, can you hear me?" as "Hi Noah, can you hear me?" every time on 2026-11-24 - so it must count, even
+# though Noah is a real name (if the team has a Noah, remove it here and rely on the other spellings).
 VARIANTS = {
     "maya": ["maya", "sumaya", "somaya", "maia", "mayah", "maiya", "mya", "myah", "maja", "mayya", "माया", "मया",
              "मायाजी", "مایا", "مايا", "ماया"],
-    "nova": ["nova", "novah", "novaa", "nowa", "noava", "knova", "नोवा", "नोवाजी", "नोवा जी", "नोवाँ",
+    "nova": ["nova", "novah", "novaa", "nowa", "noava", "knova", "noah", "noa", "nouva", "नोवा", "नोवाजी", "नोवा जी", "नोवाँ",
              "نووا", "نوا", "نووہ"],
 }
 

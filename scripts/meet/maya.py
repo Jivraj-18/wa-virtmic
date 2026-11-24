@@ -194,7 +194,11 @@ class Maya:
                                          "create_response": False,      # never answer on its own
                                          "interrupt_response": True},   # server also cancels on talk-over
                       # no forced language: Hindi/Hinglish must not be squeezed into English
-                      "transcription": {"model": "gpt-4o-transcribe"}},
+                      # the prompt biases spelling: without it "Hi Nova, can you hear me?" came out as "झरना." and
+                      # "Macarena is a dancer." (2026-11-24, real Meet)
+                      "transcription": {"model": "gpt-4o-transcribe", "prompt": (
+                          f"A team video meeting in English or Hinglish (Hindi-English mix). People talk to the AI "
+                          f"assistant, whose name is {NAME}: 'Hi {NAME}', '{NAME}, can you hear me?', 'okay {NAME}'.")}},
             "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": realtime_agent.VOICE}}
         self.agent = Agent(Path(transcript) if transcript else None, log=log, instructions=INSTRUCTIONS,
                            greeting=None, in_device=in_device, out_device=out_device,
