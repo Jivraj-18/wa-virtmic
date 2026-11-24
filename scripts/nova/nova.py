@@ -8,6 +8,8 @@
     python scripts/nova/nova.py upcoming [--hours 24]   # next meetings with Meet links (Calendar via gws)
     python scripts/nova/nova.py autojoin [--once]  # watch Calendar, join ~1 min before start (service: autojoin.sh)
     python scripts/nova/nova.py notes [latest|<dir>] [--send]   # meeting notes (notes.py)
+    python scripts/nova/nova.py announce add "<text>" --title "<words in the title>" --wait-for "<person>"
+                                                   # raises hand once that person is there, speaks when given the floor
     python scripts/nova/nova.py meetings           # past meetings (folders under ~/nova_meetings)
     python scripts/nova/nova.py chrome up|down     # start / gracefully stop Nova's Chrome (CDP 9333, display :97)
 
@@ -292,6 +294,27 @@ def cmd_autojoin(a):
     return C.loop(once=a.once, start_join=start_join, busy=busy)
 
 
+def cmd_announce(a):
+    items = B.load_announcements()
+    if a.action == "add":
+        aid = time.strftime("%Y%m%d%H%M%S")
+        items.append({"id": aid, "title": a.title, "url": a.url, "text": a.text, "after_s": a.after,
+                      "min_others": a.min_others, "quiet_s": 4, "chat": not a.no_chat, "added": time.time(),
+                      "wait_for": a.wait_for, "raise_hand": not a.no_hand})
+        B.save_announcements(items)
+        print(f"queued {aid}: Nova will say it in the next meeting matching title={a.title!r} url={a.url!r}")
+    elif a.action == "rm":
+        B.save_announcements([x for x in items if x.get("id") != a.id])
+        print("removed", a.id)
+    else:
+        for x in items:
+            st = f"DONE {time.strftime('%F %H:%M', time.localtime(x['done_at']))} in {x.get('done_in')}" if x.get("done_at") else "pending"
+            print(f"{x['id']}  [{st}]  title={x.get('title')!r} after {x.get('after_s')}s, >= {x.get('min_others')} others, "
+                  f"waits for {x.get('wait_for') or 'anyone'}{', raises hand' if x.get('raise_hand', True) else ''}\n    {x['text']}")
+        if not items:
+            print("no announcements")
+
+
 def cmd_notes(a):
     cmd = [sys.executable, str(HERE / "notes.py"), "make", a.target] + (["--send"] if a.send else [])
     return subprocess.call(cmd)
@@ -316,6 +339,15 @@ def main():
     aj = sub.add_parser("autojoin"); aj.add_argument("--once", action="store_true"); aj.set_defaults(fn=cmd_autojoin)
     n = sub.add_parser("notes"); n.add_argument("target", nargs="?", default="latest")
     n.add_argument("--send", action="store_true"); n.set_defaults(fn=cmd_notes)
+    an = sub.add_parser("announce", help="queue something Nova says once in a future meeting")
+    an.add_argument("action", choices=["add", "list", "rm"])
+    an.add_argument("text", nargs="?"); an.add_argument("--title", help="meeting title contains (case-insensitive)")
+    an.add_argument("--url"); an.add_argument("--id"); an.add_argument("--after", type=float, default=120,
+                                                                        help="seconds after joining (default 120)")
+    an.add_argument("--min-others", type=int, default=2); an.add_argument("--no-chat", action="store_true")
+    an.add_argument("--wait-for", help="only when this person is in the call, and they must give Nova the floor")
+    an.add_argument("--no-hand", action="store_true", help="speak when quiet instead of raising the hand first")
+    an.set_defaults(fn=cmd_announce)
     m = sub.add_parser("meetings"); m.add_argument("-n", type=int, default=10); m.set_defaults(fn=cmd_meetings)
     c = sub.add_parser("chrome"); c.add_argument("action", choices=["up", "down"]); c.set_defaults(fn=cmd_chrome)
     a = ap.parse_args()

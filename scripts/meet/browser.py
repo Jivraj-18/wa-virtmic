@@ -107,6 +107,27 @@ def cdp_up(port=PORT) -> bool:
         return False
 
 
+def allow_meet_media(profile=PROFILE):
+    """Persist 'allow microphone + camera on meet.google.com' in the profile (Chrome must be stopped).
+    CDP permission overrides vanish when the CDP connection that set them closes - every `nova status` / probe
+    used to reset Meet to "Microphone problem" mid-meeting (2026-11-24). A real site setting doesn't."""
+    prefs = Path(profile) / "Default" / "Preferences"
+    if not prefs.exists():
+        return False
+    p = json.loads(prefs.read_text())
+    ex = p.setdefault("profile", {}).setdefault("content_settings", {}).setdefault("exceptions", {})
+    changed = False
+    for kind in ("media_stream_mic", "media_stream_camera"):
+        d = ex.setdefault(kind, {})
+        key = "https://meet.google.com:443,*"
+        if d.get(key, {}).get("setting") != 1:
+            d[key] = {"last_modified": str(int(time.time() * 1e6)), "setting": 1}
+            changed = True
+    if changed:
+        prefs.write_text(json.dumps(p))
+    return changed
+
+
 def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False, display=DISPLAY, prefix="maya"):
     """Start Maya's Chrome (or reuse it if already on `port`). Returns the Popen or None if it was running."""
     _check_port(port)
@@ -114,6 +135,7 @@ def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False,
         return None
     profile = Path(profile)
     profile.mkdir(parents=True, exist_ok=True)
+    allow_meet_media(profile)
     env = dict(os.environ, PULSE_SINK=f"{prefix}_out", PULSE_SOURCE=f"{prefix}_mic")
     env.pop("PULSE_LATENCY_MSEC", None)   # WhatsApp finding: the big-buffer flags drop mic frames natively
     ps = _pulse_server()
@@ -205,6 +227,8 @@ RX = {
     "chat": re.compile(r"^chat with everyone|^chat\b", re.I),
     "send": re.compile(r"^send a message", re.I),
     "dialog_ok": re.compile(r"^(got it|dismiss|close|ok)$", re.I),
+    "raise": re.compile(r"^raise hand", re.I),
+    "lower": re.compile(r"^lower hand", re.I),
 }
 CHAT_BOX = 'textarea[aria-label*="Send a message" i], textarea[placeholder*="Send a message" i]'
 
@@ -226,8 +250,21 @@ async def dismiss_dialogs(page):
 async def join_meet(page, url, name=NAME, lobby_timeout=600, log=print, on_phase=lambda p: None) -> str:
     """Open the Meet URL, camera off, mic on, click Join/Ask to join. Returns 'joined' or raises."""
     on_phase("joining")
-    await page.goto(url, wait_until="load", timeout=30000)
-    await page.wait_for_timeout(2500)
+    # Meet keeps loading for a long time on the phone; "load" can take > 30 s. Continue as soon as the DOM is there
+    # and the pre-join controls (or a name field / lobby / error text) appear.
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    except Exception as e:
+        log(f"maya: goto slow ({type(e).__name__}) - continuing if the page is usable")
+    for _ in range(60):
+        try:
+            if await page.get_by_role("button", name=RX["join"]).count() or \
+                    await page.get_by_placeholder(RX["name"]).count() or (await meet_state(page)).get("denied"):
+                break
+        except Exception:
+            pass
+        await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(1500)
     await dismiss_dialogs(page)
     name_box = page.get_by_placeholder(RX["name"])
     if await name_box.count() and await name_box.first.is_visible():  # not logged in -> guest join
@@ -238,11 +275,16 @@ async def join_meet(page, url, name=NAME, lobby_timeout=600, log=print, on_phase
     if await _click(page.get_by_role("button", name=RX["mic_on"])):
         log("maya: mic on")
     joined = False
-    for _ in range(20):
-        if await _click(page.get_by_role("button", name=RX["join"])):
+    for _ in range(30):
+        # a click can land but report a timeout on a slow phone: judge by the page, not by the click's result
+        st = await meet_state(page)
+        if st.get("lobby") or st.get("in_call"):
             joined = True
             break
-        await page.wait_for_timeout(500)
+        if await _click(page.get_by_role("button", name=RX["join"]), timeout=5000):
+            joined = True
+            break
+        await page.wait_for_timeout(700)
     if not joined:
         raise RuntimeError("join button not found (run `maya probe` and update RX['join'])")
     log("maya: clicked join")
@@ -286,6 +328,16 @@ async def send_chat(page, text, log=print) -> bool:
     return True
 
 
+async def raise_hand(page, up=True) -> bool:
+    """Raise (up=True) or lower Nova's hand in Meet. True if the hand is now in the wanted state."""
+    want, other = (RX["lower"], RX["raise"]) if up else (RX["raise"], RX["lower"])
+    if await page.get_by_role("button", name=want).count():
+        return True            # already in that state
+    await _click(page.get_by_role("button", name=other), timeout=5000)
+    await page.wait_for_timeout(800)
+    return await page.get_by_role("button", name=want).count() > 0
+
+
 async def leave_meet(page):
     await dismiss_dialogs(page)
     await _click(page.get_by_role("button", name=RX["leave"]))
@@ -304,15 +356,8 @@ async def connect(port=PORT):
     pw = await async_playwright().start()
     browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
     ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
-    try:  # mic + speaker access for Meet without a permission prompt (Maya's own Chrome only)
-        cdp = await browser.new_browser_cdp_session()
-        await cdp.send("Browser.grantPermissions", {"origin": "https://meet.google.com",
-                                                    "permissions": ["audioCapture", "speakerSelection"]})
-    except Exception:
-        try:
-            await cdp.send("Browser.grantPermissions", {"origin": "https://meet.google.com", "permissions": ["audioCapture"]})
-        except Exception:
-            pass
+    # Meet's mic/camera permission is a persistent site setting (allow_meet_media at launch). No CDP permission
+    # overrides here: they are dropped when this connection closes, which broke Meet's mic mid-meeting.
     return pw, browser, ctx
 
 
@@ -416,6 +461,42 @@ async def page_text(page, limit=3000) -> str:
         return f"(no text: {e})"
 
 
+ANNOUNCE = Path(os.environ.get("NOVA_ANNOUNCE", str(Path.home() / ".config" / "nova" / "announce.json")))
+
+
+def load_announcements() -> list:
+    try:
+        return json.loads(ANNOUNCE.read_text())
+    except Exception:
+        return []
+
+
+def save_announcements(items: list):
+    ANNOUNCE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ANNOUNCE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, indent=1, ensure_ascii=False))
+    tmp.replace(ANNOUNCE)
+
+
+def due_announcements(title: str, url: str) -> list:
+    """Pending one-off things Nova should SAY in this meeting (queued by the owner with `nova announce add`)."""
+    t, u = (title or "").lower(), (url or "").lower()
+    return [x for x in load_announcements() if not x.get("done_at") and
+            (not x.get("title") or x["title"].lower() in t) and (not x.get("url") or x["url"].lower() in u)]
+
+
+def mark_announced(aid: str, meeting: str):
+    items = load_announcements()
+    for x in items:
+        if x.get("id") == aid:
+            x["done_at"], x["done_in"] = time.time(), meeting
+    save_announcements(items)
+
+
+ANNOUNCE_PROMPT = ("You raised your hand and {who} just gave you the floor ({cue}). Now say the following, once, "
+                   "naturally and politely, close to this wording, in English, without adding anything else: \"{text}\"")
+
+
 def spawn_notes(run_dir, log=print):
     """Post-meeting notes in a separate, detached process (never in the meeting loop)."""
     notes = Path(__file__).resolve().parents[1] / "nova" / "notes.py"
@@ -482,11 +563,11 @@ def _cmd_join(a):
         devices_up()
         launch_chrome("about:blank", port=a.port)
         pw, browser, ctx = await connect(a.port)
-        try:
-            origin = "https://meet.google.com" if "meet.google.com" in a.url else "/".join(a.url.split("/")[:3])
-            await ctx.grant_permissions(["microphone", "camera"], origin=origin)
-        except Exception as e:
-            print("maya: grant_permissions failed:", e)
+        if "meet.google.com" not in a.url:   # simulator page; real Meet is granted in connect() (Playwright's
+            try:                              # grant_permissions here overrode that and broke Meet's mic)
+                await ctx.grant_permissions(["microphone", "camera"], origin="/".join(a.url.split("/")[:3]))
+            except Exception as e:
+                print("maya: grant_permissions failed:", e)
         if mic_apm.enabled():  # Chrome's echo cancel / noise suppression / AGC damage a clean digital voice
             await ctx.add_init_script(mic_apm.JS)
         page = await meet_page(ctx)
@@ -559,6 +640,9 @@ def _cmd_join(a):
         async def watch():
             """Every 5 s: still in the call? leave requested? alone? past the scheduled end?"""
             seen_others, alone_since, t_join = False, None, time.time()
+            pending = due_announcements(a.title or "", a.url)
+            if pending:
+                print(f"nova: {len(pending)} announcement(s) queued for this meeting")
             while True:
                 route_streams(a.port)
                 st = await meet_state(page)
@@ -578,6 +662,40 @@ def _cmd_join(a):
                         return stop("everyone_left" if seen_others else "nobody_came")
                 if a.until and time.time() > a.until:
                     return stop("scheduled_end")
+                m = state["maya"]
+                fl = state.get("floor")
+                if fl and m and m.floor is None and not fl.get("spoken"):
+                    m.floor = fl          # carry a raised hand over a realtime reconnect
+                if not fl:   # re-read: announcements can be queued while Nova is already in the meeting
+                    pending = due_announcements(a.title or "", a.url)
+                if pending and not fl and m and m.agent.ws and not m.speaking():
+                    x = pending[0]
+                    quiet = time.time() - max(m.last_caption, m.last_trigger) > x.get("quiet_s", 4)
+                    who = (x.get("wait_for") or "").lower()
+                    heard = {sp.lower() for _, sp in m.recent_speakers} | {n.lower() for n in st.get("names", [])}
+                    present = (not who) or any(who in n for n in heard)
+                    enough = (others or 0) >= x.get("min_others", 1) or (others is None and time.time() - t_join > 300)
+                    if time.time() - t_join >= x.get("after_s", 60) and enough and present and quiet:
+                        pending.pop(0)
+                        if x.get("raise_hand", True):
+                            ok = await raise_hand(page, True)
+                            m.event("hand_raised", id=x.get("id"), ok=ok, waiting_for=who or "anyone")
+                            fl = {"x": x, "who": who, "since": time.time(), "spoken": False}
+                            state["floor"] = fl
+                            m.floor = fl
+                        else:
+                            state["floor"] = fl = {"x": x, "who": who, "since": time.time(), "spoken": False}
+                            await m.say_floor()
+                if fl and fl.get("spoken") and not fl.get("finished"):
+                    fl["finished"] = True
+                    x = fl["x"]
+                    await raise_hand(page, False)
+                    if x.get("chat", True):
+                        await send_chat(page, x["text"])
+                    mark_announced(x.get("id"), a.title or a.url)
+                    state["floor"] = None     # done: the next queued announcement (if any) can start
+                    if m:
+                        m.floor = None
                 await asyncio.sleep(5)
 
         reader_task = asyncio.create_task(reader())

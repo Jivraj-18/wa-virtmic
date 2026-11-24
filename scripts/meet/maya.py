@@ -27,7 +27,7 @@ import numpy as np  # noqa: E402
 
 import realtime_agent  # noqa: E402
 from realtime_agent import Agent, RATE  # noqa: E402
-from meet.addressing import AGENT_NAME as NAME, early_address, is_addressed  # noqa: E402
+from meet.addressing import AGENT_NAME as NAME, early_address, is_addressed, mentions_name as mentions_name_short  # noqa: E402
 from meet.suggester import Suggester  # noqa: E402
 
 INSTRUCTIONS = """You are Maya, an AI teammate in a video meeting with several people: the team's meeting secretary. You hear
@@ -68,6 +68,30 @@ CHAT_RESPOND = ("A participant addressed you in the MEETING CHAT. Answer them ou
 RESPOND = ("Someone in the meeting just addressed you by name. Answer them now, briefly (1-3 short sentences). "
            "Their words, from speech-to-text (may be cut off or slightly wrong): \"{text}\"")
 
+GO_AHEAD = re.compile(r"\b(go ahead|yes|yeah|yep|haan|ha|bolo|boliye|tell( us| me)?|speak|you('ve| have)? (got )?(a|your) "
+                      r"hand|hand (is )?(up|raised)|what('s| is) up|kya hai|please|carry on|over to you|floor)\b", re.I)
+
+FLOOR_PROMPT = """In a video meeting, the AI assistant {name} has RAISED HER HAND and is waiting to be given the floor.
+New utterance by {speaker}: "{u}"
+Is {speaker} giving {name} the floor / inviting her to speak now (e.g. "yes {name}?", "go ahead", "someone has their
+hand up", "haan bolo", "{name}, you wanted to say something?")? Reply with exactly one word: yes or no."""
+
+
+def _gives_floor(speaker, u) -> bool:
+    import urllib.request, uuid
+    import gateway
+    body = {"model": os.environ.get("MAYA_FOLLOWUP_MODEL", gateway.CHAT_MODEL), "max_tokens": 2, "temperature": 0,
+            "messages": [{"role": "user", "content": FLOOR_PROMPT.format(name=NAME, speaker=speaker, u=u[:300])},
+                         {"role": "system", "content": f"nonce {uuid.uuid4().hex[:8]}"}]}
+    try:
+        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(gateway.adapt_chat(body)).encode(),
+                                     headers={**gateway.auth_header(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return json.load(r)["choices"][0]["message"]["content"].strip().lower().startswith("y")
+    except Exception:
+        return False
+
+
 FOLLOWUP_S = 30.0      # seconds after Maya's answer during which follow-ups don't need her name
 
 FOLLOWUP_PROMPT = """You decide if a meeting utterance is directed at the AI assistant Maya as a FOLLOW-UP.
@@ -106,6 +130,8 @@ class Maya:
         self.log = log
         self.history = list(history or [])   # "who said what" lines; survives reconnects (passed to the next Maya)
         self.leave_requested = False
+        self.floor = None          # raised hand waiting for {"who"} to give Nova the floor (set by browser.watch)
+        self.floor_checking = False
         self.recent_speakers = []  # (wall time, caption speaker name)
         self.last_trigger = 0.0
         self.followup_until = 0.0      # after Maya answers, follow-ups without her name count for a while
@@ -250,11 +276,47 @@ class Maya:
         self._remember(line)
         self.suggester.add(speaker, text)
         await self.inject(line)
+        if self.floor and await self.check_floor(speaker, text):
+            return
         # Meet's captions spell the name reliably even when audio STT writes it in another script (seen: "මයා")
         if is_addressed(text) and not self.speaking():
             self.event("addressed_via_captions", speaker=speaker, text=text)
             await self.trigger(f"cap-{time.time():.0f}", f"{speaker}: {text}", early=False)
 
+
+    async def check_floor(self, speaker, text) -> bool:
+        """Hand raised: does this utterance (by the awaited person) give Nova the floor? Then make the request."""
+        fl = self.floor
+        if not fl or fl.get("spoken") or self.speaking():
+            return False
+        if fl["who"] and fl["who"] not in (speaker or "").lower():
+            return False
+        if is_addressed(text) or mentions_name_short(text):
+            ok, how = True, "named"
+        elif GO_AHEAD.search(text) and not self.floor_checking:
+            self.floor_checking = True
+            try:
+                ok = await asyncio.to_thread(_gives_floor, speaker or "someone", text)
+            finally:
+                self.floor_checking = False
+            how = "llm"
+        else:
+            return False
+        self.event("floor_check", speaker=speaker, text=text, yes=ok, how=how)
+        if ok:
+            await self.say_floor(speaker, text)
+        return ok
+
+    async def say_floor(self, speaker=None, cue=""):
+        from meet.browser import ANNOUNCE_PROMPT
+        fl = self.floor
+        if not fl or fl.get("spoken"):
+            return
+        fl["spoken"] = True
+        self.last_trigger = time.time()
+        self.event("announcement", id=fl["x"].get("id"), to=speaker, text=fl["x"]["text"])
+        await self.agent.respond(ANNOUNCE_PROMPT.format(who=speaker or "the meeting", cue=cue.replace('"', "'")[:120],
+                                                        text=fl["x"]["text"].replace('"', "'")))
 
     async def on_chat(self, sender, text):
         if sender.strip().lower() in ("you", NAME.lower()):
@@ -288,6 +350,11 @@ class Maya:
     async def trigger(self, item_id, text, early):
         if time.time() - self.last_trigger < 6:   # audio STT and captions can both catch the same question
             return
+        if self.floor and not self.floor.get("spoken"):
+            sp = text.split(":", 1)[0] if ":" in text[:60] else (self.caption_now()[0] or "")
+            if not self.floor["who"] or self.floor["who"] in sp.lower():
+                await self.say_floor(sp, text)
+                return
         self.last_trigger = time.time()
         self.triggered.add(item_id)
         self.stats["triggers"] += 1

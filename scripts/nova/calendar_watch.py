@@ -6,7 +6,7 @@ Which events Nova joins (config ~/.config/nova/autojoin.json, outside the repo; 
                               # "all":    every event with a Meet link that isn't declined (Nova's own account)
      "keyword": "nova",
      "titles": [],            # mode "titles": join only events whose TITLE contains one of these (case-insensitive),
-                              #   e.g. ["innovation team"]; the description is ignored
+                              #   e.g. ["weekly sync"]; the description is ignored
      "accounts": [],          # e.g. Nova's own address once it exists: events inviting it are joined
      "lead_s": 60,            # join this many seconds before the start
      "grace_end_min": 10,     # leave at the latest this long after the scheduled end

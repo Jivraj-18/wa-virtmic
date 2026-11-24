@@ -13,8 +13,14 @@
 <div id="lobby" hidden>Asking to be let in...  You'll join the call when someone lets you in</div>
 <div id="call" hidden>
   <button aria-label="Leave call" onclick="leave()">leave</button>
-  <button aria-label="People" id="people"><span id="pc">4</span></button>
+  <button aria-label="People" id="people"><span id="pc">5</span></button>
   <button aria-label="Chat with everyone" onclick="document.getElementById('chat').hidden=false">chat</button>
+  <button aria-label="Raise hand (ctrl + alt + h)" id="hand" onclick="toggleHand()">hand</button>
+  <div id="tiles"><div data-participant-id="p1"><span data-self-name="Asha">Asha</span></div>
+    <div data-participant-id="p2"><span data-self-name="Ravi">Ravi</span></div>
+    <div data-participant-id="p3"><span data-self-name="Kiran">Kiran</span></div>
+    <div data-participant-id="p4"><span data-self-name="Sam">Sam</span></div>
+    <div data-participant-id="p5"><span data-self-name="You">You</span></div></div>
   <div role="region" aria-label="Captions" id="cap"></div>
   <div id="chat" hidden>
     <div id="msgs"></div>
@@ -38,6 +44,8 @@ async function admit() {
   startMic();
   setTimeout(run, script.start_after * 1000);
 }
+function toggleHand() { const up = /^raise/i.test(hand.getAttribute('aria-label'));
+  hand.setAttribute('aria-label', up ? 'Lower hand (ctrl + alt + h)' : 'Raise hand (ctrl + alt + h)'); post(up ? 'hand_raised' : 'hand_lowered'); }
 function leave() { inCall = false; call.hidden = true; end.hidden = false; post('nova_left'); }
 function caption(sp, text) { cap.innerHTML = ''; const b = document.createElement('div');
   b.innerHTML = '<div></div><div></div>'; b.children[0].textContent = sp; b.children[1].textContent = text; cap.appendChild(b); }

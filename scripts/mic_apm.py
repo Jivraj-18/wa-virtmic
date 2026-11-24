@@ -17,12 +17,18 @@ JS = r"""(() => {
   window.__waNoApm = true;
   const gum = MediaDevices.prototype.getUserMedia;
   MediaDevices.prototype.getUserMedia = function (c) {
+    const orig = c;
     if (c && c.audio) {
       const a = typeof c.audio === 'object' ? c.audio : {};
-      c = Object.assign({}, c, {audio: Object.assign({}, a,
-        {echoCancellation: false, noiseSuppression: false, autoGainControl: false})});
+      // legacy {mandatory, optional} constraints (Google Meet) can't be mixed with modern keys -> use goog* there
+      const off = (a.mandatory || a.optional)
+        ? {optional: [...(a.optional || []), {googEchoCancellation: false}, {googNoiseSuppression: false},
+                      {googAutoGainControl: false}]}
+        : {echoCancellation: false, noiseSuppression: false, autoGainControl: false};
+      c = Object.assign({}, c, {audio: Object.assign({}, a, off)});
     }
-    return gum.call(this, c);
+    // never cost the page its microphone: if the changed request fails, make the page's own request
+    return gum.call(this, c).catch(() => gum.call(this, orig));
   };
 })()"""
 

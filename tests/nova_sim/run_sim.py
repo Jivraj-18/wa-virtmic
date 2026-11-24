@@ -17,8 +17,9 @@ sys.path.insert(0, str(REPO / "scripts"))
 PORT = 8765
 
 LINES = [  # speaker, voice, text, addressed, wait after (s)
-    ("Asha", "nova", "Okay, let's start the innovation team sync. The client demo is on Friday.", False, 4),
-    ("Ravi", "onyx", "I'll finish the login fix by Thursday, and Kiran will update the docs.", False, 4),
+    ("Asha", "nova", "Okay, let's start the weekly sync. The client demo is on Friday.", False, 4),
+    ("Ravi", "onyx", "I'll finish the login fix by Thursday, and Kiran will update the docs.", False, 12),
+    ("Sam", "fable", "I see a hand up. Yes, go ahead.", True, 25),
     ("Asha", "nova", "Nova, what did Ravi say he will finish, and by when?", True, 14),
     ("Kiran", "echo", "Let's ask Nova for the notes after the meeting.", False, 5),
     ("Ravi", "onyx", "नोवा, शुक्रवार के डेमो से पहले क्या बाकी है?", True, 16),
@@ -35,9 +36,9 @@ def make_script(audio_dir: Path) -> dict:
         if not wav.exists():
             speak.synth_wav(text, str(wav), engine="gateway", voice=voice)
         lines.append({"speaker": sp, "text": text, "audio": f"/audio/line{i}.wav", "addressed": addressed, "wait": wait})
-    lines.insert(4, {"speaker": CHAT_INJECTION[0], "chat": CHAT_INJECTION[1], "wait": 12})
+    lines.insert(5, {"speaker": CHAT_INJECTION[0], "chat": CHAT_INJECTION[1], "wait": 12})
     lines[-1]["people"] = 1        # after the last line everyone else leaves
-    return {"start_after": 10, "lines": lines}
+    return {"start_after": 15, "lines": lines}
 
 
 def serve(script: dict, audio_dir: Path, log_path: Path):
@@ -76,11 +77,15 @@ def main():
     log_path = run / "sim_log.jsonl"
     print("synthesising speaker lines ..."); script = make_script(audio_dir)
     srv = serve(script, audio_dir, log_path)
+    ann = run / "announce.json"
+    ann.write_text(json.dumps([{"id": "sim1", "title": "SIM weekly", "text": "Thanks Sam. Quick request from the "
+                                "owner: please share the meeting recordings with this account.", "after_s": 20,
+                                "min_others": 1, "quiet_s": 2, "chat": True, "wait_for": "sam", "raise_hand": True}]))
     env = dict(os.environ, NOVA_SIM="1", NOVA_MEETINGS=str(run / "meetings"), NOVA_ATTACH_WAIT_MIN="0",
-               MAYA_NAME="Nova")
+               MAYA_NAME="Nova", NOVA_ANNOUNCE=str(ann))
     nova = [sys.executable, str(REPO / "scripts/nova/nova.py")]
     t0 = time.time()
-    r = subprocess.run(nova + ["join", f"http://127.0.0.1:{PORT}/abc-defg-hij", "--title", "SIM innovation team sync",
+    r = subprocess.run(nova + ["join", f"http://127.0.0.1:{PORT}/abc-defg-hij", "--title", "SIM weekly sync",
                                "--alone-leave", "15"], env=env, cwd=REPO, capture_output=True, text=True)
     print(r.stdout.strip())
     status_mid = ""
@@ -102,6 +107,13 @@ def main():
     kinds = [e["ev"] for e in evs]
     checks.append(("joined via lobby", "join_clicked" in kinds and "admitted" in kinds))
     starts = {e["i"]: e["t"] for e in evs if e["ev"] == "line_start"}
+    lead = starts.get(2, 1e9)
+    checks.append(("raised hand before the lead gave the floor", any(e["ev"] == "hand_raised" and e["t"] < lead for e in evs)))
+    checks.append(("silent while the hand was up, before the lead spoke",
+                   not any(e["ev"] == "nova_voice_start" and e["t"] < lead for e in evs)))
+    checks.append(("hand lowered after speaking", any(e["ev"] == "hand_lowered" and e["t"] > lead for e in evs)))
+    checks.append(("announcement also posted in chat", any(e["ev"] == "chat_sent" and "recordings" in e.get("text", "") for e in evs)))
+    checks.append(("announcement marked done", bool(json.loads(ann.read_text())[0].get("done_at"))))
     ends = {e["i"]: e["t"] for e in evs if e["ev"] == "line_end"}
     voice = [e["t"] for e in evs if e["ev"] == "nova_voice_start"]
     order = sorted(starts)
