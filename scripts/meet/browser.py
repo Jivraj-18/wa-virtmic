@@ -26,16 +26,37 @@ PORT = int(os.environ.get("MAYA_CDP_PORT", "9333"))
 PROFILE = Path(os.environ.get("MAYA_PROFILE", str(Path.home() / ".config" / "maya-chrome-profile")))
 OUT_SINK, MIC_SINK, MIC_SOURCE = "maya_out", "maya_mic_sink", "maya_mic"
 FORBIDDEN = {"virtmic", "virtmic_sink", "callout_sink"}
-NAME = os.environ.get("MAYA_NAME", "Maya")
-# On the phone (Termux + proot) Chrome draws on the answer daemon's invisible Xvfb :99; in the Codespace on noVNC :1.
-XTMP = os.environ.get("PREFIX", "") + "/tmp" if sys.platform == "android" else "/tmp"   # native Termux: $PREFIX/tmp
-DISPLAY = os.environ.get("MAYA_DISPLAY") or (":99" if Path(f"{XTMP}/.X11-unix/X99").exists() else ":1")
+NAME = os.environ.get("MAYA_NAME", "Nova")
+NATIVE = sys.platform == "android" or os.path.exists("/data/data/com.termux/files/usr/bin/termux-info")
+XTMP = (os.environ.get("PREFIX", "/data/data/com.termux/files/usr") + "/tmp") if NATIVE else "/tmp"
+# Native Termux: Nova gets her OWN Xvfb (:97), so the WhatsApp supervisor restarting its Xvfb :99 never kills her
+# Chrome. Elsewhere (proot / Codespace) the old behaviour: :99 if it exists, else noVNC :1.
+DISPLAY = os.environ.get("MAYA_DISPLAY") or (":97" if NATIVE else
+                                             (":99" if Path(f"{XTMP}/.X11-unix/X99").exists() else ":1"))
 IN_PROOT = "proot" in os.uname().release.lower()   # Chrome's sandbox crashes under proot's ptrace
+
+
+def ensure_display(display=DISPLAY):
+    """Start a private Xvfb for Nova if her display isn't up (never touches :99, the WhatsApp display)."""
+    n = display.lstrip(":")
+    if n == "99" or Path(f"{XTMP}/.X11-unix/X{n}").exists():
+        return
+    xvfb = shutil.which("Xvfb")
+    if not xvfb:
+        raise SystemExit("Xvfb not found (pkg install xorg-server-xvfb)")
+    subprocess.Popen([xvfb, display, "-screen", "0", "1280x860x24", "-nolisten", "tcp"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                     start_new_session=True)
+    for _ in range(40):
+        if Path(f"{XTMP}/.X11-unix/X{n}").exists():
+            return
+        time.sleep(0.25)
+    raise RuntimeError(f"Xvfb {display} did not start")
 
 
 def _check_port(port):
     if port == 9222:
-        raise SystemExit("port 9222 belongs to the WhatsApp Chrome - Maya must use her own port (default 9333)")
+        raise SystemExit("port 9222 belongs to the WhatsApp Chrome - Nova must use her own port (default 9333)")
 
 
 # ---------------------------------------------------------------- PulseAudio
@@ -94,12 +115,15 @@ def launch_chrome(url="about:blank", port=PORT, profile=PROFILE, headless=False,
     profile = Path(profile)
     profile.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, PULSE_SINK=f"{prefix}_out", PULSE_SOURCE=f"{prefix}_mic")
+    env.pop("PULSE_LATENCY_MSEC", None)   # WhatsApp finding: the big-buffer flags drop mic frames natively
     ps = _pulse_server()
     if ps:
         env["PULSE_SERVER"] = ps
     if not headless:
+        ensure_display(display)
         env["DISPLAY"] = display
-    cmd = [shutil.which("google-chrome") or "google-chrome", f"--user-data-dir={profile}",
+    chrome = shutil.which("chromium-browser") if NATIVE else None
+    cmd = [chrome or shutil.which("google-chrome") or "google-chrome", f"--user-data-dir={profile}",
            f"--remote-debugging-port={port}", "--no-first-run", "--no-default-browser-check",
            "--disable-dev-shm-usage", "--window-size=1280,860", "--autoplay-policy=no-user-gesture-required"]
     if headless:
@@ -199,8 +223,9 @@ async def dismiss_dialogs(page):
     await _click(page.locator("div[role=dialog]").get_by_role("button", name=RX["dialog_ok"]))
 
 
-async def join_meet(page, url, name=NAME, lobby_timeout=180, log=print) -> str:
+async def join_meet(page, url, name=NAME, lobby_timeout=600, log=print, on_phase=lambda p: None) -> str:
     """Open the Meet URL, camera off, mic on, click Join/Ask to join. Returns 'joined' or raises."""
+    on_phase("joining")
     await page.goto(url, wait_until="load", timeout=30000)
     await page.wait_for_timeout(2500)
     await dismiss_dialogs(page)
@@ -222,10 +247,18 @@ async def join_meet(page, url, name=NAME, lobby_timeout=180, log=print) -> str:
         raise RuntimeError("join button not found (run `maya probe` and update RX['join'])")
     log("maya: clicked join")
     end = time.time() + lobby_timeout
+    in_lobby = False
     while time.time() < end:
         if await page.get_by_role("button", name=RX["leave"]).count():
             await dismiss_dialogs(page)
             return "joined"
+        st = await meet_state(page)
+        if st.get("denied"):
+            raise RuntimeError("Meet refused the join: " + (await page_text(page, 300)).replace("\n", " | "))
+        if st.get("lobby") and not in_lobby:
+            in_lobby = True
+            on_phase("lobby")
+            log("maya: waiting in the lobby for the host to admit us")
         await page.wait_for_timeout(1000)
     raise RuntimeError("not admitted within the lobby timeout")
 
@@ -290,6 +323,105 @@ async def meet_page(ctx):
     return ctx.pages[0] if ctx.pages else await ctx.new_page()
 
 
+# ---------------------------------------------------------------- meeting state (text only, no screenshots)
+STATE_DIR = Path(os.environ.get("NOVA_STATE_DIR", str(Path.home() / ".cache" / "nova")))
+STATE_FILE = STATE_DIR / "state.json"
+LEAVE_FLAG = STATE_DIR / "leave.request"
+MEETINGS = Path(os.environ.get("NOVA_MEETINGS", str(Path.home() / "nova_meetings")))
+
+
+def write_state(**kw):
+    """Merge kw into ~/.cache/nova/state.json (read by `nova status`, the autojoin service and the supervisor)."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        cur = json.loads(STATE_FILE.read_text())
+    except Exception:
+        cur = {}
+    cur.update(kw, updated=time.time())
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cur, ensure_ascii=False, indent=1))
+    tmp.replace(STATE_FILE)
+    return cur
+
+
+def read_state() -> dict:
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except Exception:
+        return {}
+
+
+# Everything Meet shows, as text: in call? lobby? mic/cam (from the toggle buttons' labels), participant count/names.
+# Participant count: the People button carries a number badge; tiles carry data-participant-id. Both are heuristics,
+# `nova probe` shows the raw buttons/text when they break.
+MEET_STATE_JS = r"""() => {
+  const vis = e => e && e.offsetParent !== null;
+  const btns = [...document.querySelectorAll('button,[role=button]')].filter(vis);
+  const lab = e => (e.getAttribute('aria-label') || e.innerText || '').trim();
+  const has = rx => btns.some(b => rx.test(lab(b)));
+  const text = document.body ? document.body.innerText : '';
+  let count = null;
+  for (const b of btns) {
+    const l = lab(b);
+    if (/^(people|show everyone|participants|view everyone)/i.test(l) || /people/i.test(b.getAttribute('aria-label') || '')) {
+      const m = (b.innerText || '').match(/\d+/) || l.match(/\((\d+)\)/) || l.match(/\b(\d+)\b/);
+      if (m) { count = parseInt(m[1] || m[0]); break; }
+    }
+  }
+  const tiles = new Map();
+  document.querySelectorAll('[data-participant-id]').forEach(t => {
+    const id = t.getAttribute('data-participant-id');
+    const nameEl = t.querySelector('[data-self-name]') || t.querySelector('.notranslate');
+    const nm = (nameEl && (nameEl.getAttribute('data-self-name') || nameEl.innerText) || '').split('\n')[0].trim();
+    if (!tiles.has(id) || (!tiles.get(id) && nm)) tiles.set(id, nm);
+  });
+  return {
+    url: location.href.split('?')[0], title: document.title,
+    in_call: has(/^leave call/i),
+    lobby: /asking to be let in|someone .{0,30}let you in|wait for the host|you'll join the call when someone lets you in/i.test(text),
+    denied: /you can't join this video call|denied your request|you've been removed|no one responded to your request/i.test(text),
+    ended: /you left the meeting|the call has ended|you've left the call|returning to home screen/i.test(text),
+    mic: has(/^turn off (microphone|mic)/i) ? 'on' : has(/^turn on (microphone|mic)/i) ? 'off' : '?',
+    cam: has(/^turn off camera/i) ? 'on' : has(/^turn on camera/i) ? 'off' : '?',
+    count, tiles: tiles.size, names: [...new Set([...tiles.values()].filter(Boolean))].slice(0, 30),
+  };
+}"""
+
+
+async def meet_state(page) -> dict:
+    try:
+        return await page.evaluate(MEET_STATE_JS)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"[:200]}
+
+
+def others_count(st: dict):
+    """People in the call other than us, or None if unknown."""
+    if st.get("count") is not None:
+        return max(0, st["count"] - 1)
+    if st.get("tiles"):
+        return max(0, st["tiles"] - 1)
+    return None
+
+
+async def page_text(page, limit=3000) -> str:
+    try:
+        return (await page.evaluate("() => document.body.innerText"))[:limit]
+    except Exception as e:
+        return f"(no text: {e})"
+
+
+def spawn_notes(run_dir, log=print):
+    """Post-meeting notes in a separate, detached process (never in the meeting loop)."""
+    notes = Path(__file__).resolve().parents[1] / "nova" / "notes.py"
+    if not notes.exists():
+        return
+    with open(Path(run_dir) / "notes.log", "ab") as f:
+        subprocess.Popen([sys.executable, str(notes), "make", str(run_dir), "--send"], stdout=f, stderr=f,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
+    log(f"nova: notes are being written in the background -> {run_dir}/notes.md")
+
+
 # ---------------------------------------------------------------- CLI commands
 def _cmd_devices(a):
     if a.action == "up":
@@ -329,6 +461,17 @@ def _cmd_join(a):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from meet.maya import Maya
     from meet import meet_reader as R
+    import mic_apm
+
+    run_dir = Path(a.out or MEETINGS / time.strftime("%Y%m%d_%H%M%S"))
+    run_dir.mkdir(parents=True, exist_ok=True)
+    LEAVE_FLAG.unlink(missing_ok=True)
+    write_state(phase="starting", url=a.url, pid=os.getpid(), run_dir=str(run_dir), event=a.event, title=a.title,
+                until=a.until, joined_at=None, error=None, others=None, names=[])
+
+    def phase(p, **kw):
+        write_state(phase=p, **kw)
+        print(f"nova: phase={p}", flush=True)
 
     async def go():
         devices_up()
@@ -338,15 +481,21 @@ def _cmd_join(a):
             await ctx.grant_permissions(["microphone", "camera"], origin="https://meet.google.com")
         except Exception as e:
             print("maya: grant_permissions failed:", e)
+        if mic_apm.enabled():  # Chrome's echo cancel / noise suppression / AGC damage a clean digital voice
+            await ctx.add_init_script(mic_apm.JS)
         page = await meet_page(ctx)
-        await join_meet(page, a.url, name=a.name)
+        try:
+            await join_meet(page, a.url, name=a.name, lobby_timeout=a.lobby_timeout, on_phase=phase)
+        except Exception as e:
+            phase("failed", error=str(e)[:300])
+            await pw.stop()
+            raise SystemExit(f"nova: join failed: {e}")
+        phase("in_meeting", joined_at=time.time())
         loop = asyncio.get_running_loop()
-        root = Path.home() / "maya_meetings"
-        history = load_previous_history(a.url, root) if not a.fresh else []
-        run_dir = Path(a.out or root / time.strftime("%Y%m%d_%H%M%S"))
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "meta.json").write_text(json.dumps({"url": a.url, "started": time.time()}))
-        live = Path.home() / "maya_live_transcript.txt"  # stable path to the current meeting's who-said-what log
+        history = load_previous_history(a.url, MEETINGS) if not a.fresh else []
+        (run_dir / "meta.json").write_text(json.dumps({"url": a.url, "started": time.time(), "event": a.event,
+                                                        "title": a.title, "name": NAME}))
+        live = Path.home() / "nova_live_transcript.txt"  # stable path to the current meeting's who-said-what log
         (run_dir / "who_said_what.txt").touch()
         try:
             live.unlink(missing_ok=True)
@@ -367,7 +516,7 @@ def _cmd_join(a):
             asyncio.run_coroutine_threadsafe(send_chat(page, text), loop)
 
         async def reader():
-            """Poll Meet's captions (who said what) and chat; feed new lines to the current Maya session."""
+            """Poll Meet's captions (who said what) and chat; feed new lines to the current session."""
             warned = {"cap": False, "chat": False}
             n = 0
             while True:
@@ -381,7 +530,7 @@ def _cmd_join(a):
                         print("maya: captions region not found (yet)"); warned["cap"] = True
                 elif m:
                     if blocks:
-                        own = [b for b in blocks if b["speaker"].strip().lower() not in ("you", "maya")]
+                        own = [b for b in blocks if b["speaker"].strip().lower() not in ("you", NAME.lower())]
                         if own:
                             m.live_caption = (time.time(), own[-1]["speaker"], own[-1]["text"])
                     for sp, tx in cap.update(blocks):
@@ -395,24 +544,47 @@ def _cmd_join(a):
                         await m.on_chat(msg["sender"], msg["text"])
                 await asyncio.sleep(1.5)
 
+        def stop(why):
+            state["ended"] = why
+            if state["maya"]:
+                state["maya"].event("leaving", why=why)
+                state["maya"].agent.stop.set()
+
         async def watch():
+            """Every 5 s: still in the call? leave requested? alone? past the scheduled end?"""
+            seen_others, alone_since, t_join = False, None, time.time()
             while True:
                 route_streams(a.port)
-                if not await in_meeting(page):
-                    state["maya"].event("meeting_ended")
-                    state["ended"] = True
-                    state["maya"].agent.stop.set()
-                    return
-                await asyncio.sleep(10)
+                st = await meet_state(page)
+                others = others_count(st)
+                write_state(others=others, names=st.get("names", []), mic=st.get("mic"), cam=st.get("cam"))
+                if not st.get("in_call") and not st.get("error"):
+                    return stop("meeting_ended")
+                if LEAVE_FLAG.exists():
+                    return stop("leave_requested")
+                if others is not None:
+                    if others > 0:
+                        seen_others, alone_since = True, None
+                    elif alone_since is None:
+                        alone_since = time.time()
+                    limit = a.alone_leave if seen_others else a.nobody_leave
+                    if alone_since and time.time() - alone_since > limit:
+                        return stop("everyone_left" if seen_others else "nobody_came")
+                if a.until and time.time() > a.until:
+                    return stop("scheduled_end")
+                await asyncio.sleep(5)
 
         reader_task = asyncio.create_task(reader())
+        watch_task = None
         t_end = time.time() + a.seconds
         try:
             while time.time() < t_end:
                 maya = Maya(f"{OUT_SINK}.monitor", MIC_SINK, run_dir / "transcript.txt", run_dir / "maya_events.jsonl",
                             chat_post=post, suggest_interval=a.suggest_interval, history=history)
                 state["maya"] = maya
-                await maya.run(t_end - time.time(), extra=[watch()])
+                if watch_task is None or watch_task.done():
+                    watch_task = asyncio.create_task(watch())
+                await maya.run(t_end - time.time())
                 history = maya.history
                 if maya.leave_requested or state.get("ended") or time.time() >= t_end:
                     break
@@ -420,8 +592,20 @@ def _cmd_join(a):
                 await asyncio.sleep(2)
         finally:
             reader_task.cancel()
-            await leave_meet(page)
+            if watch_task:
+                watch_task.cancel()
+            try:
+                await leave_meet(page)
+                await page.wait_for_timeout(1500)
+                await page.goto("about:blank")
+            except Exception:
+                pass
             await pw.stop()
+            why = state.get("ended") or ("asked_by_voice" if state["maya"] and state["maya"].leave_requested else "timeout")
+            phase("left", left_at=time.time(), left_why=why)
+            LEAVE_FLAG.unlink(missing_ok=True)
+            if (run_dir / "who_said_what.txt").stat().st_size or (run_dir / "transcript.txt").exists():
+                spawn_notes(run_dir)
 
     asyncio.run(go())
 
@@ -455,7 +639,14 @@ def add_commands(sub):
             p.add_argument("url")
             p.add_argument("--name", default=NAME, help="guest display name if not logged in")
             p.add_argument("--seconds", type=float, default=3600)
-            p.add_argument("--suggest-interval", type=float, default=180)
-            p.add_argument("--out", help="folder for transcript + events (default ~/maya_meetings/<ts>, outside the repo)")
+            p.add_argument("--suggest-interval", type=float, default=float(os.environ.get("MAYA_SUGGEST_INTERVAL", "0")),
+                           help="seconds between chat tips; 0 (default) = never post tips")
+            p.add_argument("--out", help="folder for transcript + events (default ~/nova_meetings/<ts>, outside the repo)")
+            p.add_argument("--until", type=float, help="unix time to leave at (autojoin: the event's end + grace)")
+            p.add_argument("--event", help="calendar event id (autojoin bookkeeping)")
+            p.add_argument("--title", help="meeting title (for the notes)")
+            p.add_argument("--lobby-timeout", type=float, default=600)
+            p.add_argument("--alone-leave", type=float, default=90, help="leave after this long alone once others were there")
+            p.add_argument("--nobody-leave", type=float, default=900, help="leave if nobody else shows up for this long")
             p.add_argument("--fresh", action="store_true", help="don't load context from earlier sessions of this meeting")
         p.set_defaults(fn=fn)

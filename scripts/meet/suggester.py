@@ -4,13 +4,13 @@ An LLM (gateway chat completions) reads the last few minutes and either returns 
 ("Maybe consider X", "You seem stuck on Y") or NONE. `post(text)` decides where it goes:
 the Meet chat (join mode) or a log file (simulation).
 """
-import json, threading, time, urllib.request
+import json, os, threading, time, urllib.request
 from collections import deque
 
 import gateway
 
 MODEL = gateway.CHAT_MODEL
-PROMPT = """You are Maya, a quiet AI participant in a team meeting. Below is the recent meeting transcript
+PROMPT = """You are {name}, a quiet AI participant in a team meeting. Below is the recent meeting transcript
 (speech-to-text, so expect small errors). Decide whether ONE short chat message would genuinely help the
 meeting right now: a consideration nobody raised, a way to unblock a discussion going in circles, or a
 concrete next step. Write it like a helpful colleague in chat, max 20 words, e.g. "Maybe consider X" or
@@ -67,7 +67,7 @@ class Suggester:
 
     def _llm(self, transcript: str, previous: list) -> str:
         return chat_complete([{"role": "user", "content": PROMPT.format(
-            transcript=transcript, previous="; ".join(previous) or "(none)")}])
+            name=os.environ.get("MAYA_NAME", "Nova"), transcript=transcript, previous="; ".join(previous) or "(none)")}])
 
     def tick(self):
         """One check. Returns the posted suggestion or None."""

@@ -93,3 +93,14 @@ about 23 MB per minute. `scripts/calls/` is pruned oldest-first to `CALLS_MAX_MB
 - Speech-to-text on very short noises produces junk ("Gua", "Logo.", Korean text), even with `language=en`. Treat 1-word lines with low confidence.
 - LLM gateway limits: (1) it can't proxy WebSocket upgrades (`missing Sec-WebSocket-Key`), so `/openai/v1/realtime` and Gemini Live can't be used through it directly. (2) It caches identical POST bodies (`X-Cache`), so the same ephemeral key/session came back. (3) It returns 429 on bursts. (4) Gemini `auth_tokens` could not be tested (429).
 - Mic permission granted over CDP lasts only for that Chrome session. `auto_answer.py` grants it again on every start.
+
+## Nova - AI teammate on Google Meet (`scripts/nova/`, skill nova-meet / nova-gws)
+| script | what |
+|---|---|
+| `nova/nova.py` | one CLI: `join <url>`, `leave`, `status`, `probe [--text]`, `login-check`, `upcoming`, `autojoin`, `notes`, `meetings`, `chrome up/down` |
+| `nova/autojoin.sh` | supervisor for the Calendar watcher (heartbeat, restarts, keeps Chrome + maya_* devices ready) |
+| `nova/calendar_watch.py` | Calendar via gws: events with Meet links, which ones to join (`~/.config/nova/autojoin.json`) |
+| `nova/notes.py` | post-meeting notes (detached): Meet transcript/Gemini notes from the Calendar event + Nova's captions -> notes.md, optional email |
+| `nova/google_login.py` | text-only Google login of Nova's Chrome (password on stdin, never stored) |
+| `nova/install_gws.sh` | install gws on native Termux (static musl build + proot resolv.conf wrapper) |
+| `meet/` | the meeting agent itself (formerly "Maya", E4): browser control, captions/chat reader, addressing rules |
