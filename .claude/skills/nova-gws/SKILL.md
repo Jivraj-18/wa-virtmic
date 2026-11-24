@@ -19,8 +19,24 @@ Android lacks: symptom "dns error: failed to lookup address information"). Keyri
 |---|---|
 | find meetings (autojoin, upcoming) | `https://www.googleapis.com/auth/calendar.events.readonly` |
 | Meet conference records / transcripts | `https://www.googleapis.com/auth/meetings.space.readonly` |
-| Meet-created Drive files (transcript, Gemini notes, recordings) | `https://www.googleapis.com/auth/drive.meet.readonly` (if export of a doc OWNED by the organizer fails with 403/404, this scope doesn't cover it: ask the user about `drive.readonly`) |
+| Meet-created Drive files | `https://www.googleapis.com/auth/drive.meet.readonly` - only files YOU own: "Notes by Gemini"/notes docs owned by the ORGANIZER fail ("has not granted the app read access", "File not found", verified 2026-11-24) -> those need `drive.readonly` (ask the user first) |
 | email the notes (only with the user's OK) | `https://www.googleapis.com/auth/gmail.send` |
+
+## Setup from scratch (user only creates the Cloud project; everything else is ours)
+1. gcloud: tarball in `~/.local/opt/google-cloud-sdk`, wrapper `~/.local/bin/gcloud` (CLOUDSDK_PYTHON=Termux python).
+   Install: `curl -fsSLO https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-linux-arm.tar.gz`,
+   untar into `~/.local/opt/`. Login without the user: `gcloud auth login --no-launch-browser` (feed the code via a
+   fifo), open the printed URL in Nova's Chrome (`python scripts/nova/web.py goto <url>`, click the account,
+   Continue, Allow), read the code from the page text (`web.py text`). Then `gcloud config set project <id>` (id from
+   `gcloud projects list`) and `gcloud services enable calendar-json.googleapis.com drive.googleapis.com meet.googleapis.com gmail.googleapis.com`.
+2. OAuth client: NO gcloud/API way for an External Desktop client, and gcloud's own ADC client is "This app is
+   blocked" for Workspace scopes, and `gws auth setup` doesn't create a client either. So:
+   `python scripts/nova/gcp_oauth_client.py <project-id> <account-email>` drives the console in Nova's Chrome
+   (branding External/Testing, test user, Desktop client -> ~/.config/gws/client_secret.json). Gotcha: in "Add
+   users" the email chip only commits with Tab (Enter alone saves nothing; "Access blocked ... developer-approved
+   testers" = test user missing).
+3. `gws auth login --scopes ...` in the background, open its URL in Nova's Chrome: account -> "Google hasn't verified
+   this app" Continue -> Continue -> tick all scopes -> Continue; the localhost callback lands on the phone.
 
 ## Auth / re-auth
 ```bash
@@ -42,6 +58,7 @@ gws drive files export --params '{"fileId":"<id>","mimeType":"text/plain"}' --ou
 gws meet conferenceRecords list --params '{"filter":"space.meeting_code = \"abc-defg-hij\""}'
 gws meet conferenceRecords transcripts list --params '{"parent":"conferenceRecords/<id>"}'
 gws schema calendar.events.list        # any method's parameters
+# --output must be inside the current directory (gws refuses other paths): cd there and pass a relative name
 ```
 Python helpers: `scripts/nova/calendar_watch.py` (`gws()`, `events()`, `meet_link()`), `scripts/nova/notes.py`
 (`find_event()`, `fetch_attachments()`, `send()`). After a meeting Google attaches the transcript / "Notes by Gemini"

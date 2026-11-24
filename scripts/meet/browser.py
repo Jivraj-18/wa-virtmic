@@ -316,9 +316,14 @@ async def connect(port=PORT):
     return pw, browser, ctx
 
 
+def is_meet_url(url: str) -> bool:
+    """meet.google.com, or the local simulator page when NOVA_SIM=1 (tests/nova_sim)."""
+    return "meet.google.com" in url or (os.environ.get("NOVA_SIM") == "1" and url.startswith("http://127.0.0.1:"))
+
+
 async def meet_page(ctx):
     for p in ctx.pages:
-        if "meet.google.com" in p.url:
+        if is_meet_url(p.url):
             return p
     return ctx.pages[0] if ctx.pages else await ctx.new_page()
 
@@ -478,7 +483,8 @@ def _cmd_join(a):
         launch_chrome("about:blank", port=a.port)
         pw, browser, ctx = await connect(a.port)
         try:
-            await ctx.grant_permissions(["microphone", "camera"], origin="https://meet.google.com")
+            origin = "https://meet.google.com" if "meet.google.com" in a.url else "/".join(a.url.split("/")[:3])
+            await ctx.grant_permissions(["microphone", "camera"], origin=origin)
         except Exception as e:
             print("maya: grant_permissions failed:", e)
         if mic_apm.enabled():  # Chrome's echo cancel / noise suppression / AGC damage a clean digital voice

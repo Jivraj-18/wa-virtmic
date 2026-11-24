@@ -5,6 +5,8 @@ Which events Nova joins (config ~/.config/nova/autojoin.json, outside the repo; 
                               #           one of "accounts" (use this while gws is on a PERSONAL calendar)
                               # "all":    every event with a Meet link that isn't declined (Nova's own account)
      "keyword": "nova",
+     "titles": [],            # mode "titles": join only events whose TITLE contains one of these (case-insensitive),
+                              #   e.g. ["innovation team"]; the description is ignored
      "accounts": [],          # e.g. Nova's own address once it exists: events inviting it are joined
      "lead_s": 60,            # join this many seconds before the start
      "grace_end_min": 10,     # leave at the latest this long after the scheduled end
@@ -19,8 +21,9 @@ CONF = Path.home() / ".config" / "nova" / "autojoin.json"
 STATE_DIR = Path(os.environ.get("NOVA_STATE_DIR", str(Path.home() / ".cache" / "nova")))
 JOINED = STATE_DIR / "autojoined.json"
 HEARTBEAT = STATE_DIR / "autojoin.heartbeat"
+PLAN = STATE_DIR / "plan.txt"     # which meetings Nova will join (rewritten on every Calendar refresh)
 MEET = re.compile(r"https://meet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}")
-DEFAULTS = {"mode": "tagged", "keyword": "nova", "accounts": [], "lead_s": 60, "grace_end_min": 10,
+DEFAULTS = {"mode": "tagged", "keyword": "nova", "titles": [], "accounts": [], "lead_s": 60, "grace_end_min": 10,
             "calendar": "primary"}
 
 
@@ -33,10 +36,11 @@ def conf() -> dict:
     return c
 
 
-def gws(*args, timeout=60) -> dict:
+def gws(*args, timeout=60, cwd=None) -> dict:
+    """Run gws, return parsed JSON. --output paths must be inside `cwd` (gws refuses others)."""
     env = dict(os.environ, GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=os.environ.get("GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND", "file"))
     exe = os.environ.get("GWS", str(Path.home() / ".local" / "bin" / "gws"))
-    r = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout, env=env)
+    r = subprocess.run([exe, *args], capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout).strip().splitlines()
         raise RuntimeError("gws failed: " + " | ".join(msg[-3:])[:400])
@@ -76,6 +80,7 @@ def events(hours=24, back_hours=2, c=None) -> list:
             continue
         me = next((x for x in ev.get("attendees", []) if x.get("self")), {})
         out.append({"id": ev["id"], "title": (ev.get("summary") or "(no title)")[:120], "link": link,
+                    "summary": " ".join((ev.get("summary") or "").lower().split()),
                     "start": _ts(ev["start"]), "end": _ts(ev["end"]), "response": me.get("responseStatus", "owner"),
                     "organizer": (ev.get("organizer") or {}).get("email", ""),
                     "attendees": [x.get("email", "") for x in ev.get("attendees", [])],
@@ -88,6 +93,9 @@ def wanted(e: dict, c: dict) -> tuple:
         return False, "declined"
     if c["mode"] == "all":
         return True, "mode=all"
+    if c["mode"] == "titles":
+        hit = next((t for t in c["titles"] if t.lower() in e["summary"]), None)
+        return (True, f"title has '{hit}'") if hit else (False, f"title not in {c['titles']}")
     if re.search(rf"\b{re.escape(c['keyword'].lower())}\b", e["text"]):
         return True, f"tagged '{c['keyword']}'"
     if set(a.lower() for a in c["accounts"]) & set(a.lower() for a in e["attendees"]):
@@ -127,8 +135,11 @@ def loop(once=False, start_join=None, busy=None, refresh_s=180, tick_s=15):
         now = time.time()
         if now - fetched > refresh_s:
             try:
-                evs, err = events(hours=12, back_hours=4, c=c), ""
+                evs, err = events(hours=36, back_hours=4, c=c), ""
                 fetched = now
+                plan = [dict(e, join=wanted(e, c)[0], why=wanted(e, c)[1]) for e in evs if e["end"] > now]
+                PLAN.write_text(f"# Nova's plan, refreshed {time.strftime('%F %T')} (rules: {CONF})\n" +
+                                ("\n".join(fmt(e) for e in plan) or "no meetings with Meet links in the next 36 h") + "\n")
             except Exception as e:
                 err = str(e)[:200]
                 fetched = now - refresh_s + 60   # retry in a minute

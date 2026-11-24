@@ -60,6 +60,8 @@ def run_async(coro):
 # ---------------------------------------------------------------- join / leave
 def start_join(url, until=None, event=None, title=None, wait=90, extra=()) -> int:
     m = MEET_URL.search(url or "")
+    if os.environ.get("NOVA_SIM") == "1" and (url or "").startswith("http://127.0.0.1:"):
+        m = re.match(r".*", url)   # local simulator page (tests/nova_sim/run_sim.py)
     if not m:
         print(f"not a Meet link: {url!r} (expected https://meet.google.com/abc-defg-hij)")
         return 2
@@ -110,8 +112,10 @@ def start_join(url, until=None, event=None, title=None, wait=90, extra=()) -> in
 
 
 def cmd_join(a):
-    return start_join(a.url, until=a.until and time.time() + a.until * 60, wait=a.wait,
-                      extra=["--suggest-interval", str(a.tips)] if a.tips else [])
+    extra = ["--suggest-interval", str(a.tips)] if a.tips else []
+    if a.alone_leave:
+        extra += ["--alone-leave", str(a.alone_leave)]
+    return start_join(a.url, until=a.until and time.time() + a.until * 60, wait=a.wait, title=a.title, extra=extra)
 
 
 def cmd_leave(a):
@@ -132,7 +136,7 @@ def cmd_leave(a):
         async def go():
             pw, br, ctx = await B.connect()
             for p in ctx.pages:
-                if "meet.google.com" in p.url:
+                if B.is_meet_url(p.url):
                     await B.leave_meet(p)
                     await p.wait_for_timeout(1000)
                     await p.goto("about:blank")
@@ -161,7 +165,7 @@ def cmd_status(a):
     if B.cdp_up():
         async def go():
             pw, br, ctx = await B.connect()
-            pages = [p for p in ctx.pages if "meet.google.com" in p.url]
+            pages = [p for p in ctx.pages if B.is_meet_url(p.url)]
             for p in pages:
                 s = await B.meet_state(p)
                 print(f"  page {s.get('url')}: in_call={s.get('in_call')} lobby={s.get('lobby')} mic={s.get('mic')} "
@@ -172,6 +176,9 @@ def cmd_status(a):
                 print("  no Meet tab open")
             await pw.stop()
         run_async(go())
+    plan = B.STATE_DIR / "plan.txt"
+    if plan.exists():
+        print(plan.read_text().rstrip())
     hb = AUTOJOIN_HEARTBEAT
     if hb.exists():
         print(f"AUTOJOIN: heartbeat {ago(hb.stat().st_mtime)}  {hb.read_text().strip()[:200]}")
@@ -298,6 +305,8 @@ def main():
     j.add_argument("--until", type=float, help="leave after N minutes at the latest")
     j.add_argument("--wait", type=float, default=90, help="seconds to wait for joined/lobby before returning")
     j.add_argument("--tips", type=float, default=0, help="post chat tips every N s (default off)")
+    j.add_argument("--title", help="meeting title for the notes")
+    j.add_argument("--alone-leave", type=float, help="leave after N s alone once others were there (default 90)")
     j.set_defaults(fn=cmd_join)
     sub.add_parser("leave").set_defaults(fn=cmd_leave)
     s = sub.add_parser("status"); s.add_argument("--lines", type=int, default=5); s.set_defaults(fn=cmd_status)

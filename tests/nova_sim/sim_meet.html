@@ -1,0 +1,80 @@
+<!doctype html>
+<!-- Fake Google Meet for Nova's end-to-end simulation (tests/nova_sim/run_sim.py). Same accessible names as real
+     Meet (Nov 2026): pre-join buttons, lobby text, Leave call, People count, Captions region, chat panel.
+     In the call it plays the scripted lines (audio -> Chrome speaker -> maya_out -> Nova's ears), shows each as a
+     caption, and measures Chrome's MIC (maya_mic = Nova's voice) to see when Nova speaks. Results are POSTed to /log. -->
+<html><head><title>Meet - sim</title><style>body{font:14px sans-serif}</style></head><body>
+<div id="pre">
+  <h2>Ready to join?</h2>
+  <button aria-label="Turn off camera (ctrl + e)" onclick="this.setAttribute('aria-label','Turn on camera (ctrl + e)')">cam</button>
+  <button aria-label="Turn on microphone (ctrl + d)" onclick="this.setAttribute('aria-label','Turn off microphone (ctrl + d)')">mic</button>
+  <button onclick="ask()">Join now</button>
+</div>
+<div id="lobby" hidden>Asking to be let in...  You'll join the call when someone lets you in</div>
+<div id="call" hidden>
+  <button aria-label="Leave call" onclick="leave()">leave</button>
+  <button aria-label="People" id="people"><span id="pc">4</span></button>
+  <button aria-label="Chat with everyone" onclick="document.getElementById('chat').hidden=false">chat</button>
+  <div role="region" aria-label="Captions" id="cap"></div>
+  <div id="chat" hidden>
+    <div id="msgs"></div>
+    <textarea aria-label="Send a message" onkeydown="if(event.key==='Enter'){event.preventDefault();post('chat_sent',{text:this.value});this.value=''}"></textarea>
+  </div>
+</div>
+<div id="end" hidden>You left the meeting</div>
+<script>
+const T0 = performance.now(), now = () => +((performance.now() - T0) / 1000).toFixed(2);
+const log = [];
+function post(ev, extra) {
+  const rec = Object.assign({t: now(), ev}, extra || {});
+  log.push(rec);
+  fetch('/log', {method: 'POST', body: JSON.stringify(rec)}).catch(() => {});
+}
+function ask() { post('join_clicked'); pre.hidden = true; lobby.hidden = false; setTimeout(admit, 3000); }
+let inCall = false, script = null;
+async function admit() {
+  lobby.hidden = true; call.hidden = false; inCall = true; post('admitted');
+  script = await (await fetch('/script.json')).json();
+  startMic();
+  setTimeout(run, script.start_after * 1000);
+}
+function leave() { inCall = false; call.hidden = true; end.hidden = false; post('nova_left'); }
+function caption(sp, text) { cap.innerHTML = ''; const b = document.createElement('div');
+  b.innerHTML = '<div></div><div></div>'; b.children[0].textContent = sp; b.children[1].textContent = text; cap.appendChild(b); }
+function chatMsg(sender, text) { const g = document.createElement('div'); g.setAttribute('data-sender-name', sender);
+  const m = document.createElement('div'); m.setAttribute('data-message-text', text); m.textContent = text; g.appendChild(m);
+  msgs.appendChild(g); }
+let micOn = false, micStart = 0;
+async function startMic() {
+  const s = await navigator.mediaDevices.getUserMedia({audio: true});
+  const ac = new AudioContext(), an = ac.createAnalyser(); an.fftSize = 2048;
+  ac.createMediaStreamSource(s).connect(an);
+  const buf = new Float32Array(an.fftSize);
+  let loud = 0, quiet = 0;
+  setInterval(() => {
+    an.getFloatTimeDomainData(buf);
+    let e = 0; for (const x of buf) e += x * x;
+    const rms = Math.sqrt(e / buf.length);
+    if (rms > 0.01) { loud++; quiet = 0; } else { quiet++; loud = 0; }
+    if (!micOn && loud >= 2) { micOn = true; micStart = now(); post('nova_voice_start'); }
+    if (micOn && quiet >= 8) { micOn = false; post('nova_voice_end', {dur: +(now() - micStart).toFixed(2)}); }
+  }, 100);
+}
+const sleep = s => new Promise(r => setTimeout(r, s * 1000));
+async function run() {
+  for (let i = 0; i < script.lines.length && inCall; i++) {
+    const L = script.lines[i];
+    if (L.chat) { chatMsg(L.speaker, L.chat); post('chat_in', {i, speaker: L.speaker}); }
+    if (L.audio) {
+      const a = new Audio(L.audio);
+      post('line_start', {i, addressed: !!L.addressed});
+      caption(L.speaker, L.text);
+      await a.play(); await new Promise(r => a.onended = r);
+      post('line_end', {i});
+    }
+    await sleep(L.wait || 4);
+    if (L.people !== undefined) { pc.textContent = String(L.people); post('people', {n: L.people}); }
+  }
+  post('script_done');
+}
+</script></body></html>

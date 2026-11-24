@@ -159,7 +159,7 @@ def fetch_attachments(d: Path, meta: dict, wait_min: float) -> int:
             try:
                 tmp = d / "export.tmp"
                 C.gws("drive", "files", "export", "--params", json.dumps({"fileId": fid, "mimeType": "text/plain"}),
-                      "--output", str(tmp))
+                      "--output", tmp.name, cwd=str(d), timeout=120)
                 tmp.replace(out)
                 got += 1
                 log(f"attachment exported: {title} ({out.stat().st_size} bytes)")
