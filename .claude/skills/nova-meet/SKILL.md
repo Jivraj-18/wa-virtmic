@@ -61,6 +61,15 @@ re-read every 5 s during a meeting. Rehearse in a test meeting with `--title "<t
   source-outputs` must show a Chrome stream on `maya_mic`.
 - Playwright clicks time out on the heavy Meet page: `js_click()` (click from inside the page) as fallback.
 - Meet's page may not fire "load" in 30 s: join waits for the pre-join controls instead.
+- Name: Meet captions AND gpt-4o-transcribe write "Nova" as "Noah" -> "noah"/"noa" are aliases in addressing.py.
+- Meet chat in an ORGANIZATION's meeting refuses messages from outside accounts ("Your message wasn't delivered";
+  "In-call messages are available in Google Chat to invited users who are in the host's organization"). send_chat
+  detects it and returns False; Nova then says so and reads links out (`speakable_url`). Fix for real: org allows
+  external chat, or Nova's account is inside the org. Read the panel: `nova.py probe --text`.
+- Tasks: `python scripts/nova/task.py list` / `show <id>`; work folders `~/nova_work/<id>/`; who may give tasks:
+  `~/.config/nova/tasks.json`; what Nova built: `~/.config/nova/projects.json`.
+- Memory: the phone had 170 MB free / swap nearly full during a test -> "voice breaking up". Close other apps;
+  check `free -m` (want > 1 GB available) before important meetings.
 - A Chrome that ran for hours with killed tests stopped capturing at all: `nova.py chrome down` + `up` fixed it.
 
 ## Google login (Nova's Chrome)

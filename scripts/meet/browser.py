@@ -341,11 +341,36 @@ async def send_chat(page, text, log=print) -> bool:
     if not await box.count():
         log("maya: chat box not found")
         return False
+    before = await _undelivered_count(page)
     await box.first.fill(text)
     await page.wait_for_timeout(200)
     await box.first.press("Enter")
+    # Meet accepts the text but may refuse delivery: outside accounts can't post in an organization's meeting chat
+    # ("Your message wasn't delivered" + "In-call messages are available ... in the host's organization", 2026-11-24)
+    for _ in range(8):
+        await page.wait_for_timeout(500)
+        if await _undelivered_count(page) > before:
+            log(f"maya: chat NOT delivered (Meet refused it - outside account?): {text}")
+            CHAT_BLOCKED[page.url.split("?")[0]] = True
+            return False
     log(f"maya: chat sent: {text}")
     return True
+
+
+CHAT_BLOCKED = {}   # meeting url -> True once Meet refused one of our chat messages
+
+
+async def _undelivered_count(page) -> int:
+    try:
+        return await page.evaluate("() => (document.body.innerText.match(/message wasn.t delivered|not delivered|couldn.t send/gi) || []).length")
+    except Exception:
+        return 0
+
+
+def speakable_url(url: str) -> str:
+    """'https://jivraj-18.github.io/innovation-lab/' -> 'jivraj-18 dot github dot io slash innovation-lab'."""
+    u = re.sub(r"^https?://(www\.)?", "", url.strip()).rstrip("/")
+    return u.replace(".", " dot ").replace("/", " slash ").replace("-", " dash ").replace("_", " underscore ")
 
 
 async def raise_hand(page, up=True) -> bool:
@@ -728,7 +753,14 @@ def _cmd_join(a):
                     x = fl["x"]
                     await raise_hand(page, False)
                     if x.get("chat", True) and (x.get("chat_text") or x["text"]):
-                        await send_chat(page, x.get("chat_text") or x["text"])
+                        ok = await send_chat(page, x.get("chat_text") or x["text"])
+                        urls = re.findall(r"https?://\S+[\w/]", x.get("chat_text") or "")
+                        if not ok and urls and m:
+                            spoken = "; ".join(speakable_url(u) for u in urls[:2])
+                            m.event("links_spoken", urls=urls[:2])
+                            await m.agent.respond("The meeting chat refused your message (you joined from an outside "
+                                                  "account). Say in one short sentence that you can't post in this "
+                                                  f"meeting's chat, then read this link out slowly and clearly: {spoken}")
                     mark_announced(x.get("id"), a.title or a.url)
                     state["floor"] = None     # done: the next queued announcement (if any) can start
                     if m:
@@ -743,6 +775,7 @@ def _cmd_join(a):
                 maya = Maya(f"{OUT_SINK}.monitor", MIC_SINK, run_dir / "transcript.txt", run_dir / "maya_events.jsonl",
                             chat_post=post, suggest_interval=a.suggest_interval, history=history)
                 maya.meeting_url, maya.meeting_title = a.url, a.title or ""
+                maya.chat_send = lambda text: send_chat(page, text)
                 state["maya"] = maya
                 if watch_task is None or watch_task.done():
                     watch_task = asyncio.create_task(watch())
