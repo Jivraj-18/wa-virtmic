@@ -727,8 +727,8 @@ def _cmd_join(a):
                     fl["finished"] = True
                     x = fl["x"]
                     await raise_hand(page, False)
-                    if x.get("chat", True):
-                        await send_chat(page, x["text"])
+                    if x.get("chat", True) and (x.get("chat_text") or x["text"]):
+                        await send_chat(page, x.get("chat_text") or x["text"])
                     mark_announced(x.get("id"), a.title or a.url)
                     state["floor"] = None     # done: the next queued announcement (if any) can start
                     if m:
@@ -742,6 +742,7 @@ def _cmd_join(a):
             while time.time() < t_end:
                 maya = Maya(f"{OUT_SINK}.monitor", MIC_SINK, run_dir / "transcript.txt", run_dir / "maya_events.jsonl",
                             chat_post=post, suggest_interval=a.suggest_interval, history=history)
+                maya.meeting_url, maya.meeting_title = a.url, a.title or ""
                 state["maya"] = maya
                 if watch_task is None or watch_task.done():
                     watch_task = asyncio.create_task(watch())
@@ -765,7 +766,9 @@ def _cmd_join(a):
             why = state.get("ended") or ("asked_by_voice" if state["maya"] and state["maya"].leave_requested else "timeout")
             phase("left", left_at=time.time(), left_why=why)
             LEAVE_FLAG.unlink(missing_ok=True)
-            if (run_dir / "who_said_what.txt").stat().st_size or (run_dir / "transcript.txt").exists():
+            # Meeting notes / action items come from Meet itself ("Notes by Gemini" on the Calendar event); Nova's own
+            # notes only with NOVA_NOTES=1 (scripts/nova/notes.py can also be run by hand).
+            if os.environ.get("NOVA_NOTES") == "1" and (run_dir / "who_said_what.txt").stat().st_size:
                 spawn_notes(run_dir)
 
     asyncio.run(go())

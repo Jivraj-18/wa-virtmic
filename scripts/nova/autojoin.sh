@@ -45,7 +45,10 @@ esac
 if alive "$PIDFILE" && [ "$(cat "$PIDFILE")" != $$ ]; then echo "already running"; exit 0; fi
 echo $$ >"$PIDFILE"
 command -v termux-wake-lock >/dev/null && termux-wake-lock
-trap 'alive "$CHILD_PIDFILE" && kill "$(cat "$CHILD_PIDFILE")"; rm -f "$PIDFILE"; exit 0' TERM INT
+CHILD=""
+# Clean up only OUR OWN child and pid file: a stopping old supervisor once deleted the new one's pid file and killed
+# its watcher (bash runs the trap only after `sleep` returns - hence `sleep & wait` below, which is interruptible).
+trap '[ -n "$CHILD" ] && kill "$CHILD" 2>/dev/null; [ "$(cat "$PIDFILE" 2>/dev/null)" = $$ ] && rm -f "$PIDFILE"; exit 0' TERM INT
 log "supervisor start (pid $$)"
 n=0
 while true; do
@@ -67,7 +70,7 @@ EOF
   if ! alive "$CHILD_PIDFILE"; then
     log "starting watcher"
     (cd "$REPO" && exec $PY -u scripts/nova/nova.py autojoin >>"$LOG" 2>&1) &
-    echo $! >"$CHILD_PIDFILE"
+    CHILD=$!; echo $CHILD >"$CHILD_PIDFILE"
   elif [ -f "$HB" ] && [ $(( $(date +%s) - $(stat -c %Y "$HB") )) -gt 180 ]; then
     log "watcher heartbeat stale - restarting it"; kill "$(cat "$CHILD_PIDFILE")" 2>/dev/null; sleep 2
     kill -9 "$(cat "$CHILD_PIDFILE")" 2>/dev/null; rm -f "$CHILD_PIDFILE"; continue
@@ -76,5 +79,6 @@ EOF
   if [ $((n % 360)) -eq 1 ]; then  # every ~6 h: is the Google session still alive?
     (cd "$REPO" && $PY scripts/nova/nova.py login-check 2>&1 | tail -1 | sed "s/^/$(date '+%F %T') login-check: /" >>"$LOG")
   fi
-  sleep 60
+  [ "$(cat "$PIDFILE" 2>/dev/null)" = $$ ] || echo $$ >"$PIDFILE"   # self-heal the pid file
+  sleep 60 & wait $!
 done
