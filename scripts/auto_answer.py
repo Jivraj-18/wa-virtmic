@@ -476,8 +476,11 @@ def main():
                     continue
                 caller = None
                 if r.get("found"):   # who is calling (saved name or number from the popup) -> call-center desk
-                    from context import caller_from_text
-                    caller = caller_from_text(r.get("text"))
+                    try:   # never let the caller lookup stop us answering
+                        from context import caller_from_text
+                        caller = caller_from_text(r.get("text"))
+                    except Exception as e:
+                        log(f"caller lookup failed ({type(e).__name__}: {e}) - answering anyway")
                 if r.get("found") and a.context:
                     from context import caller_allowed, caller_from_text, load_context
                     caller = caller_from_text(r.get("text"))

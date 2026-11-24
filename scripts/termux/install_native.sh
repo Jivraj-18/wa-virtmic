@@ -8,6 +8,7 @@ pkg install -y x11-repo
 pkg install -y chromium xorg-server-xvfb xorg-xdpyinfo pulseaudio python-playwright nodejs python-numpy ffmpeg \
   python-cryptography python-pip clang make pkg-config libsrtp libvpx libopus termux-api
 python -c "import aiortc, av" 2>/dev/null || pip install aiortc
+python -c "import yaml, websockets" 2>/dev/null || pip install pyyaml websockets
 # Termux names it chromium-browser; the scripts (launch_chrome.sh, meet/browser.py) call google-chrome.
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$PREFIX/bin/chromium-browser" "$HOME/.local/bin/google-chrome"

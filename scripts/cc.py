@@ -140,7 +140,7 @@ def main(argv):
         with sync_playwright() as pw:
             page = _page(pw)
             for r in due:
-                wa_store.send(page, r["num"], f"Reminder: {r['text']}")
+                wa_store.send(page, r["num"], r["text"] if r["text"].lower().startswith("reminder") else f"Reminder: {r['text']}")
                 r["sent"] = time.time(); changed = True
                 print(f"sent reminder to +{r['num']}: {r['text']}")
         if changed:
