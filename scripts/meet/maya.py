@@ -143,7 +143,10 @@ def past_work() -> str:
 
 
 def task_requesters() -> list:
-    """Who may give Nova tasks (lowercase name parts), from ~/.config/nova/tasks.json {"allowed_requesters": [...]}."""
+    """Who may give Nova tasks (lowercase name parts), from ~/.config/nova/tasks.json {"allowed_requesters": [...]}
+    (NOVA_TASK_REQUESTERS="a,b" overrides, for tests)."""
+    if os.environ.get("NOVA_TASK_REQUESTERS"):
+        return [x.strip().lower() for x in os.environ["NOVA_TASK_REQUESTERS"].split(",") if x.strip()]
     try:
         return [x.lower() for x in json.loads((Path.home() / ".config/nova/tasks.json").read_text())
                 .get("allowed_requesters", [])]
@@ -175,6 +178,40 @@ New utterance{who}: {u}
 Answer "yes" if it continues the conversation with Maya (a follow-up question, a request to her, "and what about...",
 "why?", "tell me more", a correction of her answer). Answer "no" if the humans are talking among themselves, reacting
 ("okay", "nice", laughter), or talking ABOUT Maya. Reply with exactly one word: yes or no.""".replace("Maya", NAME)
+
+
+ADDRESSEE_PROMPT = """You decide, in a live multi-person video meeting, whether the AI teammate {name} should SPEAK NOW.
+{name} is an AI teammate in the meeting (a developer who takes tasks). Speech-to-text may misspell its name
+(Noah, Nova, No, Noa, नोवा ...).
+{engaged}
+Recent conversation (oldest first, may be garbled):
+{context}
+
+NEW utterance by {who}: "{u}"
+
+Answer "yes" if {who} is talking TO {name} and expects a reply now: a question or request to {name}, a follow-up in an
+ongoing exchange with {name} (even without its name: "and what about X?", "why?", "can you also...", "make it blue"),
+giving {name} the floor, or a question to the room that clearly needs {name} (e.g. about its work).
+Answer "no" if people are talking among themselves, reacting ("okay", "nice", "thanks" with nothing more), talking
+ABOUT {name} to others, or if it's unclear. Silence is the safe default.
+Reply with exactly one word: yes or no."""
+
+
+def _should_respond(context, u, speaker, engaged) -> bool:
+    import urllib.request, uuid
+    import gateway
+    body = {"model": os.environ.get("MAYA_FOLLOWUP_MODEL", gateway.CHAT_MODEL), "max_tokens": 2, "temperature": 0,
+            "messages": [{"role": "user", "content": ADDRESSEE_PROMPT.format(
+                name=NAME, engaged=engaged, context=context[-2500:] or "(nothing yet)", who=speaker or "someone",
+                u=u[:400])},
+                         {"role": "system", "content": f"nonce {uuid.uuid4().hex[:8]}"}]}
+    try:
+        req = urllib.request.Request(gateway.base() + "/openai/v1/chat/completions", data=json.dumps(gateway.adapt_chat(body)).encode(),
+                                     headers={**gateway.auth_header(), "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return json.load(r)["choices"][0]["message"]["content"].strip().lower().startswith("y")
+    except Exception:
+        return False
 
 
 def _is_followup(q, a, u, speaker=None) -> bool:
@@ -244,6 +281,15 @@ class Maya:
                           f"A team video meeting in English or Hinglish (Hindi-English mix). People talk to the AI "
                           f"assistant, whose name is {NAME}: 'Hi {NAME}', '{NAME}, can you hear me?', 'okay {NAME}'.")}},
             "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": realtime_agent.VOICE}}
+        self.engine = os.environ.get("NOVA_ENGINE", "realtime")
+        if self.engine == "live":   # GPT-Live, full duplex, decides itself when to talk (scripts/meet/live_meet.py)
+            from meet.live_meet import MeetLiveAgent, LIVE_INSTRUCTIONS
+            hist = ("\n\nEARLIER IN THIS MEETING (before you (re)connected):\n" + "\n".join(self.history[-60:])[-5000:]
+                    if self.history else "")
+            self.agent = MeetLiveAgent(Path(transcript) if transcript else None, log=log,
+                                       instructions=LIVE_INSTRUCTIONS.format(name=NAME) + past_work() + hist,
+                                       in_device=in_device, out_device=out_device, on_line=self.on_live_line, maya=self)
+            return
         self.agent = Agent(Path(transcript) if transcript else None, log=log, instructions=INSTRUCTIONS + past_work(),
                            greeting=None, in_device=in_device, out_device=out_device,
                            on_event=self.on_event, session_extra={"audio": audio},
@@ -267,7 +313,20 @@ class Maya:
             self.event("stats", **self.stats)
 
     def speaking(self) -> bool:
+        if self.engine == "live" and self.agent.speaking():
+            return True
         return time.time() < self.play_until
+
+    def on_live_line(self, who, text):
+        """GPT-Live transcript lines (its own speech-to-text of the meeting and of what it said)."""
+        if who == "AI":
+            self._remember(f"[{NAME} said] {text}")
+            self.last_exchange = (self.last_exchange[0], text)
+            self.followup_until = time.time() + FOLLOWUP_S
+        elif who == "CALLER":
+            self.stats["utterances"] += 1
+            if time.time() - self.last_caption > 30:   # captions missing: keep the unnamed text as context
+                self._remember(f"[Heard] {text}")
 
     # ---------------------------------------------------------------- context (captions, chat, memory)
     def _remember(self, line):
@@ -287,6 +346,8 @@ class Maya:
             self.log(f"maya: inject failed: {e}")
 
     async def restore_history(self):
+        if self.engine == "live":
+            return
         while self.agent.ws is None:
             await asyncio.sleep(0.1)
         if self.history:
@@ -327,24 +388,25 @@ class Maya:
             await self.maybe_followup(best, sp, source="utterance")
 
     async def maybe_followup(self, text, speaker=None, source="audio"):
-        """Inside the follow-up window, ask a small LLM whether this utterance continues the talk with Maya."""
-        if time.time() > self.followup_until or self.classifying or self.speaking() or is_addressed(text):
+        """No name heard: does the speaker still expect Nova to answer? A small LLM reads the recent conversation.
+        (First contact is usually by name; after that people just keep talking to her, or the room asks her.)"""
+        if self.speaking() or is_addressed(text) or len(text.split()) < 2:
             return
-        if len(text.split()) < 2:
-            return
+        if self.floor and not self.floor.get("spoken"):
+            return   # hand raised: only the floor logic decides
         q = self.last_exchange[0]
-        if text.strip().lower() in q.lower() or q.lower().endswith(text.strip().lower()):
+        if q and (text.strip().lower() in q.lower() or q.lower().endswith(text.strip().lower())):
             return  # same question we just answered
-        self.classifying = True
-        try:
-            q, a = self.last_exchange
-            yes = await asyncio.to_thread(_is_followup, q, a, text, speaker)
-        finally:
-            self.classifying = False
-        self.live_caption = (0.0, "", "")   # this caption is decided; don't let the next utterance reuse it
-        # (used_captions is NOT cleared here: captions stay on screen and must not trigger a second follow-up)
-        self.event("followup_check", text=text, speaker=speaker, yes=yes, source=source)
-        if yes and time.time() <= self.followup_until + 5:
+        engaged = ""
+        if time.time() < self.followup_until + 90:   # talked with someone in the last ~2 min
+            engaged = (f"{NAME} is in an ongoing exchange: it was asked \"{self.last_exchange[0][:200]}\" and answered "
+                       f"\"{self.last_exchange[1][:200]}\".")
+        context = "\n".join(self.history[-14:])
+        t0 = time.time()
+        yes = await asyncio.to_thread(_should_respond, context, text, speaker, engaged)
+        self.event("addressee_check", text=text, speaker=speaker, yes=yes, source=source, engaged=bool(engaged),
+                   ms=int((time.time() - t0) * 1000))
+        if yes:
             await self.trigger(f"fu-{time.time():.0f}", (f"{speaker}: " if speaker else "") + text, early=False)
 
     async def on_caption(self, speaker, text):
@@ -358,6 +420,8 @@ class Maya:
         await self.inject(line)
         if self.floor and await self.check_floor(speaker, text):
             return
+        if self.engine == "live":
+            return   # GPT-Live hears the meeting itself and decides when to answer
         # Meet's captions spell the name reliably even when audio STT writes it in another script (seen: "මයා")
         if is_addressed(text) and not self.speaking():
             self.event("addressed_via_captions", speaker=speaker, text=text)
@@ -396,6 +460,15 @@ class Maya:
         self.last_trigger = time.time()
         x = fl["x"]
         wav = Path(x.get("audio") or "")
+        if not wav.is_file() and self.engine == "live":
+            try:   # GPT-Live can't be told what to say: speak it with TTS in her voice (~4 s)
+                import speak
+                wav = Path(Path.home() / ".config/nova/announce_audio" / f"{x.get('id', 'now')}.wav")
+                wav.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(speak.synth_wav, x["text"], str(wav), "gateway",
+                                        os.environ.get("REALTIME_VOICE", "marin"))
+            except Exception as e:
+                self.log(f"maya: TTS for announcement failed: {e}")
         self.event("announcement", id=x.get("id"), to=speaker, text=x["text"], prerecorded=wav.is_file())
         if wav.is_file():
             # pre-recorded in Nova's voice when queued: starts instantly (the model took ~7 s for a long text)
@@ -593,7 +666,8 @@ class Maya:
     async def run(self, max_seconds=3600, extra=()):
         if self.suggest_interval > 0:   # 0 = no chat tips (Nova default: a secretary stays quiet unless addressed)
             self.suggester.start()
-        tasks = [asyncio.create_task(self.local_vad()), asyncio.create_task(self.restore_history())] + \
+        own = [self.restore_history()] if self.engine == "live" else [self.local_vad(), self.restore_history()]
+        tasks = [asyncio.create_task(c) for c in own] + \
             [asyncio.create_task(c) for c in extra]
         try:
             await self.agent.run(max_seconds)
