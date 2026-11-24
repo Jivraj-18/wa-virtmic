@@ -22,7 +22,7 @@ from playwright.sync_api import sync_playwright
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from speak import play_wav, synth_wav  # noqa: E402
-from transcribe import segments  # noqa: E402
+from transcribe import call_segments, segments  # noqa: E402
 from realtime_agent import INSTRUCTIONS, Agent  # noqa: E402
 import diskguard  # noqa: E402
 
@@ -380,13 +380,19 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             for w in (ai_wav, caller_wav):
                 subprocess.run([sys.executable, str(HERE / "rms.py"), str(w)])
 
-            lines = []
-            for who, w in (("AI", ai_wav), ("CALLER", caller_wav)):
-                try:
-                    lines += [(s["start"], s["end"], who, s["text"]) for s in segments(str(w)) if s["text"]]
-                except Exception as e:
-                    lines.append((0, 0, who, f"<transcription failed: {e}>"))
+            t_tr = time.time()
+            try:   # one request for the whole call (see transcribe.call_segments)
+                lines = call_segments(str(ai_wav), str(caller_wav))
+            except Exception as e:
+                log(f"one-shot transcript failed ({type(e).__name__}: {e}) - falling back to per-utterance")
+                lines = []
+                for who, w in (("AI", ai_wav), ("CALLER", caller_wav)):
+                    try:
+                        lines += [(s["start"], s["end"], who, s["text"]) for s in segments(str(w)) if s["text"]]
+                    except Exception as e2:
+                        lines.append((0, 0, who, f"<transcription failed: {e2}>"))
             lines.sort()
+            log(f"transcribed in {time.time() - t_tr:.1f}s")
             tr = d / "transcript.txt"  # offline (post-call) transcript of both recordings
             tr.write_text(f"Call {ts}  duration {dur:.0f}s\n" +
                           "".join(f"[{int(a)//60:02d}:{a%60:04.1f}] {who:6s} {t}\n" for a, _, who, t in lines))

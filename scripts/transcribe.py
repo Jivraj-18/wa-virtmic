@@ -49,20 +49,59 @@ def transcribe(path: str, model: str = "gpt-4o-transcribe", language: str | None
     return _post(path, model, {"language": language} if language else {})["text"]
 
 
-def _post(path: str, model: str, extra: dict) -> dict:
+def _post(path: str, model: str, extra: dict, timeout: float = 120) -> dict:
     load_env()
     b = uuid.uuid4().hex
+    name, ctype = ("a.mp3", "audio/mpeg") if path.endswith(".mp3") else ("a.wav", "audio/wav")
+    fields = list(extra.items()) if isinstance(extra, dict) else list(extra)
     body = b"".join([
         f"--{b}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{model}\r\n".encode(),
-        *[f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode() for k, v in extra.items()],
-        f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n".encode(),
+        *[f"--{b}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode() for k, v in fields],
+        f"--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: {ctype}\r\n\r\n".encode(),
         open(path, "rb").read(), f"\r\n--{b}--\r\n".encode()])
     req = urllib.request.Request(
         gateway.base() + "/openai/v1/audio/transcriptions", data=body,
         headers={**gateway.auth_header(),
                  "Content-Type": f"multipart/form-data; boundary={b}"})
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
+
+
+def _rms_track(path: str):
+    """(rms per 10 ms frame, frames per second) of a 16-bit mono WAV."""
+    import wave, numpy as np
+    with wave.open(path) as w:
+        sr = w.getframerate()
+        a = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32)
+    hop = max(1, sr // 100)
+    n = len(a) // hop
+    return np.sqrt((a[: n * hop].reshape(n, hop) ** 2).mean(axis=1)), 100
+
+
+def call_segments(ai_wav: str, caller_wav: str, model: str = "whisper-1") -> list[tuple]:
+    """Whole-call transcript in ONE request: mix both sides into one small mp3, transcribe it with segment
+    timestamps, then label each segment AI or CALLER by which recording is louder during it.
+    [(start_s, end_s, who, text)]. (Per-utterance requests, one after another, took ~half the call's length;
+    this takes a few seconds: 2.8 min call -> 3.5-15 s.) Language is auto-detected (Hindi callers too)."""
+    import subprocess, tempfile, numpy as np
+    with tempfile.TemporaryDirectory() as d:
+        mix = f"{d}/call.mp3"   # mono 16 kHz 32 kbps: ~14 MB per hour, under the 25 MB upload limit
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", ai_wav, "-i", caller_wav, "-filter_complex",
+                        "amix=inputs=2:normalize=0", "-ac", "1", "-ar", "16000", "-b:a", "32k", mix], check=True)
+        r = _post(mix, model, [("response_format", "verbose_json"), ("timestamp_granularities[]", "segment")],
+                  timeout=600)
+    ai, fps = _rms_track(ai_wav)
+    caller, _ = _rms_track(caller_wav)
+    out = []
+    for sg in r.get("segments", []):
+        text = sg.get("text", "").strip()
+        if not text:
+            continue
+        a, b = int(sg["start"] * fps), max(int(sg["end"] * fps), int(sg["start"] * fps) + 1)
+        e_ai = float(np.mean(ai[a:b])) if a < len(ai) else 0.0
+        e_ca = float(np.mean(caller[a:b])) if a < len(caller) else 0.0
+        out.append((sg["start"], sg["end"], "AI" if e_ai >= e_ca else "CALLER", text))
+    return out
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(); ap.add_argument("wav"); ap.add_argument("--model", default="gpt-4o-transcribe")
