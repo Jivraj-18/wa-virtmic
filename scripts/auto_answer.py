@@ -366,33 +366,41 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             f"{d / 'transcript_live.txt'}")
         return
 
-    # stereo file: L = AI (what we sent), R = caller (what we received); plus a mono mp3 to listen to
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(ai_wav), "-i", str(caller_wav),
-                    "-filter_complex", "[0:a][1:a]join=inputs=2:channel_layout=stereo[a]", "-map", "[a]",
-                    str(d / "call_stereo.wav")])
-    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(ai_wav), "-i", str(caller_wav),
-                    "-filter_complex", "amix=inputs=2:normalize=0", "-b:a", "96k", str(d / "call_mix.mp3")])
-    for w in (ai_wav, caller_wav):
-        subprocess.run([sys.executable, str(HERE / "rms.py"), str(w)])
+    # Offline work (mp3, ~90 s of transcription) runs in the background: done inline it kept us from watching for
+    # calls, and a caller ringing back right after hanging up (Anand, 2026-11-24 11:44) was never answered.
+    # Not a daemon: wa_call.py, which exits after the call, waits for it.
+    def post_call():
+        try:
+            # stereo file: L = AI (what we sent), R = caller (what we received); plus a mono mp3 to listen to
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(ai_wav), "-i", str(caller_wav),
+                            "-filter_complex", "[0:a][1:a]join=inputs=2:channel_layout=stereo[a]", "-map", "[a]",
+                            str(d / "call_stereo.wav")])
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(ai_wav), "-i", str(caller_wav),
+                            "-filter_complex", "amix=inputs=2:normalize=0", "-b:a", "96k", str(d / "call_mix.mp3")])
+            for w in (ai_wav, caller_wav):
+                subprocess.run([sys.executable, str(HERE / "rms.py"), str(w)])
 
-    lines = []
-    for who, w in (("AI", ai_wav), ("CALLER", caller_wav)):
-        try:
-            lines += [(s["start"], s["end"], who, s["text"]) for s in segments(str(w)) if s["text"]]
+            lines = []
+            for who, w in (("AI", ai_wav), ("CALLER", caller_wav)):
+                try:
+                    lines += [(s["start"], s["end"], who, s["text"]) for s in segments(str(w)) if s["text"]]
+                except Exception as e:
+                    lines.append((0, 0, who, f"<transcription failed: {e}>"))
+            lines.sort()
+            tr = d / "transcript.txt"  # offline (post-call) transcript of both recordings
+            tr.write_text(f"Call {ts}  duration {dur:.0f}s\n" +
+                          "".join(f"[{int(a)//60:02d}:{a%60:04.1f}] {who:6s} {t}\n" for a, _, who, t in lines))
+            log("transcript ->", tr)
+            print(tr.read_text(), flush=True)
+            if ctx:
+                try:
+                    from call_summary import summarize
+                    log("summary ->", summarize(d, ctx, caller))
+                except Exception as e:
+                    log(f"summary failed: {type(e).__name__}: {e}")
         except Exception as e:
-            lines.append((0, 0, who, f"<transcription failed: {e}>"))
-    lines.sort()
-    tr = d / "transcript.txt"  # offline (post-call) transcript of both recordings
-    tr.write_text(f"Call {ts}  duration {dur:.0f}s\n" +
-                  "".join(f"[{int(a)//60:02d}:{a%60:04.1f}] {who:6s} {t}\n" for a, _, who, t in lines))
-    log("transcript ->", tr)
-    print(tr.read_text(), flush=True)
-    if ctx:
-        try:
-            from call_summary import summarize
-            log("summary ->", summarize(d, ctx, caller))
-        except Exception as e:
-            log(f"summary failed: {type(e).__name__}: {e}")
+            log(f"post-call processing failed: {type(e).__name__}: {e}")
+    threading.Thread(target=post_call, name="post-call").start()
 
 
 HEARTBEAT = os.environ.get("AA_HEARTBEAT")  # answer_daemon.sh: file touched while we're alive and not stuck
