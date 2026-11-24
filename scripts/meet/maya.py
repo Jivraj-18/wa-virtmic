@@ -107,6 +107,29 @@ Is {speaker} giving {name} the floor / inviting her to speak now (e.g. "yes {nam
 hand up", "haan bolo", "{name}, you wanted to say something?")? Reply with exactly one word: yes or no."""
 
 
+def past_work() -> str:
+    """What Nova built before and her recent tasks (her memory across meetings), appended to the instructions."""
+    lines = []
+    try:
+        for p in json.loads((Path.home() / ".config/nova/projects.json").read_text())[-10:]:
+            lines.append(f"- project {p.get('repo')} {p.get('url', '')}: {p.get('task', '')[:140]} ({p.get('date')})")
+    except Exception:
+        pass
+    work = Path(os.environ.get("NOVA_WORK", str(Path.home() / "nova_work")))
+    for d in sorted(work.glob("2*"))[-8:]:
+        try:
+            m = json.loads((d / "task.json").read_text())
+            res = m.get("result", {})
+            lines.append(f"- task {m['id'][:8]} from {m.get('requester') or '?'} [{m.get('state')}]: {m['task'][:120]}"
+                         + (f" -> {res.get('say', '')[:140]}" if res else ""))
+        except Exception:
+            pass
+    if not lines:
+        return ""
+    return ("\n\nYOUR PAST WORK (your memory; use it when people refer to earlier work, e.g. 'the site you made'):\n"
+            + "\n".join(lines))
+
+
 def task_requesters() -> list:
     """Who may give Nova tasks (lowercase name parts), from ~/.config/nova/tasks.json {"allowed_requesters": [...]}."""
     try:
@@ -209,7 +232,7 @@ class Maya:
                           f"A team video meeting in English or Hinglish (Hindi-English mix). People talk to the AI "
                           f"assistant, whose name is {NAME}: 'Hi {NAME}', '{NAME}, can you hear me?', 'okay {NAME}'.")}},
             "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": realtime_agent.VOICE}}
-        self.agent = Agent(Path(transcript) if transcript else None, log=log, instructions=INSTRUCTIONS,
+        self.agent = Agent(Path(transcript) if transcript else None, log=log, instructions=INSTRUCTIONS + past_work(),
                            greeting=None, in_device=in_device, out_device=out_device,
                            on_event=self.on_event, session_extra={"audio": audio},
                            tools=[LEAVE_TOOL, TASK_TOOL, CHAT_TOOL], on_tool=self.on_tool)
@@ -444,8 +467,12 @@ class Maya:
                           "--meeting-url", self.meeting_url, "--title", self.meeting_title, "--context", context],
                          stdout=logf, stderr=logf, stdin=subprocess.DEVNULL, start_new_session=True)
         self.event("task_started", requester=sp, task=task)
-        return {"ok": True, "status": "Started in the background. Say briefly you're on it and will raise your hand "
-                                      "when it's done. Don't describe the steps."}
+        spoke = time.time() < self.play_until + 1.5     # the model already said "got it" along with the tool call
+        return {"ok": True, "_no_reply": spoke,
+                "status": "STARTED in the background - NOT done yet. Never say it is done, pushed or published until a "
+                          "[Task result] arrives (you'll raise your hand then)." +
+                          ("" if spoke else " Now say ONE short sentence: what you understood and that you'll raise "
+                                            "your hand when it's done.")}
 
     # ---------------------------------------------------------------- realtime events
     async def trigger(self, item_id, text, early):

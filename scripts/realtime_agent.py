@@ -128,9 +128,12 @@ class Agent:
         except Exception as e:
             result = {"error": f"{type(e).__name__}: {e}"}
         self.log(f"tool done: {name} in {time.time() - t:.1f}s -> {json.dumps(result, ensure_ascii=False)[:200]}")
+        # a handler may return {"_no_reply": True, ...}: the model already spoke with this call, don't speak again
+        no_reply = isinstance(result, dict) and result.pop("_no_reply", False)
         await self.send({"type": "conversation.item.create", "item": {
             "type": "function_call_output", "call_id": call_id, "output": json.dumps(result, ensure_ascii=False)}})
-        await self.respond()
+        if not no_reply:
+            await self.respond()
 
     # ---- main -------------------------------------------------------------
     async def run(self, max_seconds: float = 3600):

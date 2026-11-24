@@ -122,13 +122,32 @@ def projects_text() -> str:
     return "\n".join(f"- {p['repo']} {p.get('url', '')}: {p['task'][:150]} ({p['date']})" for p in ps[-15:]) or "(none yet)"
 
 
+def repo_exists(repo, env=None) -> bool:
+    r = subprocess.run(["gh", "api", f"repos/{repo}", "--jq", ".full_name"], capture_output=True, text=True,
+                       env=env or gh_env(), timeout=30)
+    return r.returncode == 0
+
+
+def gh_env():
+    env = dict(os.environ)
+    if TOKEN.exists():
+        env["GH_TOKEN"] = TOKEN.read_text().strip()
+    return env
+
+
 def remember_project(meta, res):
+    """Keep ~/.config/nova/projects.json = repos Nova made/changed that still exist (a 'delete it' task removes it)."""
     try:
         ps = json.loads(PROJECTS.read_text())
     except Exception:
         ps = []
-    ps = [p for p in ps if p.get("repo") != res.get("repo")] + [
-        {"repo": res.get("repo", ""), "url": res.get("url", ""), "task": meta["task"], "date": time.strftime("%F")}]
+    repo = res.get("repo", "")
+    old = next((p for p in ps if p.get("repo") == repo), None)
+    ps = [p for p in ps if p.get("repo") != repo]
+    if repo and repo_exists(repo):
+        ps.append({"repo": repo, "url": res.get("url", "") or (old or {}).get("url", ""),
+                   "task": (old or {}).get("task", meta["task"]) if old else meta["task"],
+                   "last_change": meta["task"][:200], "date": time.strftime("%F")})
     PROJECTS.write_text(json.dumps(ps, indent=1))
 
 
