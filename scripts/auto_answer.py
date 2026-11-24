@@ -9,7 +9,7 @@ How it works (via CDP on :9222, Chrome started by launch_chrome.sh):
      WhatsApp's call signalling is an E2E-encrypted binary WebSocket, so the DOM is the trigger, not the network.
   3. Waits for Chrome to open its mic stream (pactl source-output), forces routing virtmic / callout_sink.
   4. Records BOTH sides for the whole call (virtmic = AI, callout_sink.monitor = caller) into calls/<ts>/:
-     ai.wav, caller.wav, call_stereo.wav (L=AI R=caller), call_mix.mp3, transcript.txt (timestamped, whisper-1).
+     ai.wav, caller.wav, call_stereo.wav (L=AI R=caller), call_mix.mp3, transcript.txt (timestamped, English; written by post_call.py).
      Recording stops when the call UI and Chrome's mic stream are gone for 3 s.
 On first detection it dumps the call UI HTML to call_ui_ringing.html for debugging selectors (overwritten each time).
 Storage (diskguard.py): calls/ is pruned oldest-first to CALLS_MAX_MB before each call; below DISK_MIN_FREE_GB free,
@@ -22,7 +22,6 @@ from playwright.sync_api import sync_playwright
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from speak import play_wav, synth_wav  # noqa: E402
-from transcribe import call_segments, segments  # noqa: E402
 from realtime_agent import INSTRUCTIONS, Agent  # noqa: E402
 import diskguard  # noqa: E402
 
@@ -349,11 +348,6 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
         sampler.close()
     dur = time.time() - t0
     log(f"call ended after {dur:.0f}s")
-    # back office wrap-up (notes for next time, anything promised, escalation) - not a daemon: a process that is
-    # about to exit (wa_call.py) waits for it
-    import claude_tool
-    if claude_tool.enabled() and num:
-        threading.Thread(target=claude_tool.finish, args=(d, log), name="claude-wrapup").start()
     try:  # keep this call's log lines next to its recording (wa_call_<who>.log is overwritten by the next call)
         import call_diag
         _, lines = call_diag.find_log(d)
@@ -361,52 +355,24 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             (d / "call.log").write_text("\n".join(lines) + "\n")
     except Exception as e:
         log(f"call.log not saved: {type(e).__name__}: {e}")
+    # Everything slow after a call (Claude wrap-up, mp3s, transcription) runs in a SEPARATE detached process
+    # (post_call.py) so we're watching for the next call at once - never wait for it here. Done inline, a caller
+    # ringing back 40 s after hanging up (Anand, 2026-11-24 11:44) was never answered.
+    import claude_tool
+    cmd = ["nice", "-n", "10", sys.executable, "-u", str(HERE / "post_call.py"), str(d), "--dur", f"{dur:.0f}"]
+    if claude_tool.enabled() and num:
+        cmd.append("--wrapup")
+    if ctx:
+        cmd += ["--context", str(ctx["path"])] + (["--caller", caller] if caller else [])
     if not recorded or diskguard.low(CALLS):
-        log("disk: skipping stereo/mp3/offline transcript (no recording or low space); live transcript: "
+        log("disk: no stereo/mp3/offline transcript (no recording or low space); live transcript: "
             f"{d / 'transcript_live.txt'}")
-        return
-
-    # Offline work (mp3, ~90 s of transcription) runs in the background: done inline it kept us from watching for
-    # calls, and a caller ringing back right after hanging up (Anand, 2026-11-24 11:44) was never answered.
-    # Not a daemon: wa_call.py, which exits after the call, waits for it.
-    def post_call():
-        try:
-            # stereo file: L = AI (what we sent), R = caller (what we received); plus a mono mp3 to listen to
-            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(ai_wav), "-i", str(caller_wav),
-                            "-filter_complex", "[0:a][1:a]join=inputs=2:channel_layout=stereo[a]", "-map", "[a]",
-                            str(d / "call_stereo.wav")])
-            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(ai_wav), "-i", str(caller_wav),
-                            "-filter_complex", "amix=inputs=2:normalize=0", "-b:a", "96k", str(d / "call_mix.mp3")])
-            for w in (ai_wav, caller_wav):
-                subprocess.run([sys.executable, str(HERE / "rms.py"), str(w)])
-
-            t_tr = time.time()
-            try:   # one request for the whole call, English (see transcribe.call_segments)
-                lines = call_segments(str(ai_wav), str(caller_wav), log)
-            except Exception as e:
-                log(f"one-shot transcript failed ({type(e).__name__}: {e}) - falling back to per-utterance")
-                lines = []
-                for who, w in (("AI", ai_wav), ("CALLER", caller_wav)):
-                    try:
-                        lines += [(s["start"], s["end"], who, s["text"]) for s in segments(str(w)) if s["text"]]
-                    except Exception as e2:
-                        lines.append((0, 0, who, f"<transcription failed: {e2}>"))
-            lines.sort()
-            log(f"transcribed in {time.time() - t_tr:.1f}s")
-            tr = d / "transcript.txt"  # offline (post-call) transcript of both recordings
-            tr.write_text(f"Call {ts}  duration {dur:.0f}s\n" +
-                          "".join(f"[{int(a)//60:02d}:{a%60:04.1f}] {who:6s} {t}\n" for a, _, who, t in lines))
-            log("transcript ->", tr)
-            print(tr.read_text(), flush=True)
-            if ctx:
-                try:
-                    from call_summary import summarize
-                    log("summary ->", summarize(d, ctx, caller))
-                except Exception as e:
-                    log(f"summary failed: {type(e).__name__}: {e}")
-        except Exception as e:
-            log(f"post-call processing failed: {type(e).__name__}: {e}")
-    threading.Thread(target=post_call, name="post-call").start()
+        cmd.append("--no-media")
+    try:
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True)   # inherits our stdout = our log
+        log(f"post-call work started in the background (post_call.py) - ready for the next call")
+    except Exception as e:
+        log(f"post-call work not started: {type(e).__name__}: {e}")
 
 
 HEARTBEAT = os.environ.get("AA_HEARTBEAT")  # answer_daemon.sh: file touched while we're alive and not stuck
