@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phone stack - live</title>
+<style>
+ :root{--bg:#141413;--card:#1a1a19;--line:#2c2c2a;--ink:#e8e6e1;--muted:#9a978f;--blue:#3987e5;
+       --good:#0ca30c;--warn:#fab219;--crit:#d03b3b}
+ *{box-sizing:border-box}
+ body{font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink);max-width:1000px;margin:auto;padding:12px}
+ h1{font-size:18px;margin:4px 0} h2{font-size:15px;margin:18px 0 8px}
+ .muted{color:var(--muted);font-size:12.5px}
+ nav{display:flex;gap:4px;flex-wrap:wrap;margin:10px 0;position:sticky;top:0;background:var(--bg);padding:6px 0;z-index:2}
+ nav button{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}
+ nav button[aria-selected=true]{border-color:var(--blue);color:#fff}
+ .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+ .tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px}
+ .tile b{display:block;font-size:22px;font-weight:600}
+ .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0}
+ canvas{width:100%;height:150px;display:block}
+ table{width:100%;border-collapse:collapse} td,th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+ th{color:var(--muted);font-weight:500;font-size:12.5px} td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+ .bar{height:8px;background:var(--blue);border-radius:0 4px 4px 0;min-width:2px}
+ .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+ details{border:1px solid var(--line);border-radius:8px;margin:6px 0;padding:8px;background:var(--card)}
+ details details{background:var(--bg)}
+ summary{cursor:pointer;overflow-wrap:anywhere}
+ .badge{display:inline-block;border-radius:4px;padding:0 6px;margin-right:6px;font-size:12px;background:#38383a;color:#fff}
+ .live,.active,.running{background:var(--blue)} .queued{background:#6b5b16} .done,.ok{background:#1e5b30}
+ .failed,.error{background:var(--crit)} .question{background:#6a3d8f} .new{outline:2px solid var(--blue)}
+ pre{background:#0d0d0c;padding:8px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;margin:6px 0;font-size:12.5px}
+ a{color:#7db4ff} input,button{font:inherit;padding:6px}
+ .tip{position:fixed;pointer-events:none;background:#000;border:1px solid var(--line);padding:4px 8px;border-radius:6px;font-size:12px;display:none;z-index:9}
+ [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<h1>Phone stack <span class="muted" id="status">connecting</span></h1>
+<form id="login" hidden><input id="key" type="password" placeholder="Access token"> <button>View</button></form>
+<nav id="tabs"></nav>
+<div id="v-phone"></div>
+<div id="v-claude" hidden></div>
+<div id="v-queue" hidden></div>
+<div id="v-memory" hidden></div>
+<div id="v-logs" hidden></div>
+<div class="tip" id="tip"></div>
+<script>
+// Token travels in the URL fragment (never sent to the server or tunnel logs), then as a header.
+let token = new URLSearchParams(location.hash.slice(1)).get("t") || sessionStorage.getItem("t") || "";
+if (token) sessionStorage.setItem("t", token);
+history.replaceState(null, "", location.pathname);
+const $ = id => document.getElementById(id);
+const openState = {}, steps = {}, seen = new Set();
+let hist = [], NETH = {probe: [], call: []}, work = null, sys = null, firstWork = true;
+
+function el(tag, text, cls) {          // textContent only: data is never parsed as HTML
+  const e = document.createElement(tag);
+  if (text != null && text !== "") e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+function linked(text) {
+  const box = el("div");
+  String(text).split(/(https?:\/\/[^\s<>"')\]]+)/).forEach((p, i) => {
+    if (i % 2) { const a = el("a", p); a.href = p; a.target = "_blank"; a.rel = "noopener noreferrer"; box.append(a); }
+    else box.append(p);
+  });
+  return box;
+}
+function section(key, title, badge, byDefault, cls) {
+  const d = el("details", "", cls), s = el("summary");
+  if (badge) s.append(el("span", badge, "badge " + badge));
+  s.append(title);
+  d.append(s);
+  d.open = key in openState ? openState[key] : byDefault;
+  d.addEventListener("toggle", () => { openState[key] = d.open; if (d.open && d.dataset.sid) loadSteps(d.dataset.sid); });
+  return d;
+}
+const when = t => t ? new Date(typeof t === "number" ? t * 1000 : t).toLocaleString() : "-";
+const ago = t => { if (!t) return "-"; const s = Math.round(Date.now() / 1000 - (typeof t === "number" ? t : Date.parse(t) / 1000));
+  return s < 60 ? s + "s ago" : s < 3600 ? Math.round(s / 60) + " min ago" : s < 86400 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " d ago"; };
+const mb = v => v >= 1024 ? (v / 1024).toFixed(2) + " GB" : v + " MB";
+const tok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n);
+function keepScroll(fn) { const y = scrollY; fn(); scrollTo(0, y); }
+
+// ---------- tabs
+const TABS = [["phone", "Phone"], ["claude", "Claude sessions"], ["queue", "Queue"], ["memory", "Memory"], ["logs", "Logs"]];
+let tab = sessionStorage.getItem("tab") || "phone";
+function showTab(t) {
+  tab = t; sessionStorage.setItem("tab", t);
+  TABS.forEach(([k]) => $("v-" + k).hidden = k !== t);
+  [...$("tabs").children].forEach(b => b.setAttribute("aria-selected", b.dataset.k === t));
+  if (t === "phone") drawCharts();
+}
+TABS.forEach(([k, label]) => { const b = el("button", label); b.dataset.k = k; b.onclick = () => showTab(k); $("tabs").append(b); });
+
+// ---------- line chart (one series per chart, crosshair + tooltip)
+const charts = {};
+function chart(id, title, key, fmt, maxOf, src) {
+  const card = el("div", "", "card"), c = el("canvas");
+  card.append(el("div", title, "muted"), c);
+  charts[id] = {c, key, fmt, maxOf, src, hover: null};
+  c.addEventListener("pointermove", e => { charts[id].hover = e; drawChart(id); });
+  c.addEventListener("pointerleave", () => { charts[id].hover = null; $("tip").style.display = "none"; drawChart(id); });
+  return card;
+}
+function drawChart(id) {
+  const ch = charts[id]; if (!ch || !ch.c.isConnected) return;
+  const c = ch.c, dpr = devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
+  if (!W) return;
+  c.width = W * dpr; c.height = H * dpr;
+  const g = c.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+  const pts = (ch.src ? NETH[ch.src] : hist).filter(p => p[ch.key] != null);
+  if (pts.length < 2) { g.fillStyle = "#9a978f"; g.font = "12px system-ui"; g.fillText(ch.src === "call" ? "no call yet" : "collecting", 8, 20); return; }
+  const L = 46, R = 6, T = 6, B = 18, max = Math.max(ch.maxOf(), ...pts.map(p => p[ch.key])) || 1;
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t, X = t => L + (W - L - R) * (t - t0) / Math.max(1, t1 - t0), Y = v => T + (H - T - B) * (1 - v / max);
+  g.strokeStyle = "#2c2c2a"; g.fillStyle = "#9a978f"; g.font = "11px system-ui"; g.lineWidth = 1;
+  for (const f of [0, .5, 1]) { const y = Y(max * f); g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke(); g.fillText(ch.fmt(Math.round(max * f)), 2, y + 4); }
+  g.fillText(Math.round((t1 - t0) / 60) + " min", L, H - 4);
+  g.strokeStyle = "#3987e5"; g.lineWidth = 2; g.lineJoin = "round"; g.beginPath();
+  pts.forEach((p, i) => i ? g.lineTo(X(p.t), Y(p[ch.key])) : g.moveTo(X(p.t), Y(p[ch.key]))); g.stroke();
+  if (ch.hover) {
+    const r = c.getBoundingClientRect(), x = ch.hover.clientX - r.left;
+    let best = pts[0]; for (const p of pts) if (Math.abs(X(p.t) - x) < Math.abs(X(best.t) - x)) best = p;
+    g.strokeStyle = "#9a978f"; g.lineWidth = 1; g.beginPath(); g.moveTo(X(best.t), T); g.lineTo(X(best.t), H - B); g.stroke();
+    g.fillStyle = "#3987e5"; g.strokeStyle = "#1a1a19"; g.lineWidth = 2; g.beginPath(); g.arc(X(best.t), Y(best[ch.key]), 4.5, 0, 7); g.fill(); g.stroke();
+    const tip = $("tip"); tip.textContent = new Date(best.t * 1000).toLocaleTimeString() + "  " + ch.fmt(best[ch.key]);
+    tip.style.display = "block"; tip.style.left = Math.min(innerWidth - 160, ch.hover.clientX + 12) + "px"; tip.style.top = (ch.hover.clientY - 30) + "px";
+  }
+}
+function drawCharts() { Object.keys(charts).forEach(drawChart); }
+addEventListener("resize", drawCharts);
+
+// ---------- phone view (built once, updated in place)
+const P = {};
+(function buildPhone() {
+  const v = $("v-phone"), tiles = el("div", "", "tiles");
+  for (const [k, label] of [["avail", "RAM available"], ["used", "RAM used (phone)"], ["stack", "Our stack RSS"], ["swap", "Swap used"], ["cpu", "Stack CPU"], ["disk", "Disk free"], ["batt", "Battery"]]) {
+    const t = el("div", "", "tile"); P[k] = el("b", "-"); P[k + "_s"] = el("div", "", "muted");
+    t.append(el("div", label, "muted"), P[k], P[k + "_s"]); tiles.append(t);
+  }
+  v.append(tiles, el("h2", "Services"));
+  P.services = el("div", "", "card"); v.append(P.services);
+  v.append(el("h2", "Last hour"),
+    chart("used", "Phone RAM used", "used", mb, () => sys ? sys.mem.total : 0),
+    chart("stack", "Our stack RSS (resident; swapped-out pages not counted)", "stack", mb, () => 0),
+    chart("cpu", "Stack CPU (100% = one core)", "cpu", v => v + "%", () => 100));
+  v.append(el("h2", "Network"));
+  P.probes = el("div", "", "tiles"); v.append(P.probes);
+  P.calls = el("div", "", "card"); v.append(P.calls);
+  v.append(chart("lat", "Connect time to OpenAI voice API (ms), last hour", "OpenAI (voice)", x => x + " ms", () => 0, "probe"),
+    chart("rtt", "Call round trip (ms), worst connection, last 30 min of calls", "rtt", x => x + " ms", () => 0, "call"),
+    chart("loss", "Call audio loss we receive (%)", "in_loss", x => x + "%", () => 5, "call"),
+    chart("conceal", "Concealed audio we receive (%), i.e. glitches the listener hears", "conceal", x => x + "%", () => 5, "call"));
+  v.append(el("h2", "By component (now)"));
+  P.comps = el("div", "", "card"); v.append(P.comps);
+  v.append(el("p", "Android hides whole-phone CPU and other apps' processes from Termux, so CPU and per-process numbers cover this stack only.", "muted"));
+})();
+
+function renderSystem(d) {
+  if (!d.mem) return;                    // server just started: first sample not taken yet
+  sys = d;
+  const m = d.mem, used = m.total - m.avail, pct = Math.round(100 * m.avail / m.total);
+  P.avail.textContent = mb(m.avail); P.avail_s.textContent = `${pct}% of ${mb(m.total)}`;
+  P.avail.style.color = pct < 10 ? "var(--crit)" : pct < 20 ? "var(--warn)" : "";
+  P.used.textContent = mb(used); P.used_s.textContent = "incl. other apps";
+  P.stack.textContent = mb(d.stack_mb); P.stack_s.textContent = `${d.nproc} processes`;
+  P.swap.textContent = mb(m.swap_used); P.swap_s.textContent = `of ${mb(m.swap_total)}`;
+  P.cpu.textContent = d.cpu + "%"; P.cpu_s.textContent = `${d.ncpu} cores`;
+  P.disk.textContent = d.disk.free != null ? d.disk.free + " GB" : "-"; P.disk_s.textContent = d.disk.total ? `of ${d.disk.total} GB` : "";
+  P.batt.textContent = d.battery ? d.battery.percentage + "%" : "-";
+  P.batt_s.textContent = d.battery ? `${d.battery.status}, ${d.battery.temperature}°C` : "needs Termux:API app";
+  // services
+  const st = el("table");
+  for (const s of d.services) {
+    const tr = el("tr"), td = el("td"), color = s.ok ? "var(--good)" : s.neutral ? "#6b6a66" : "var(--crit)";
+    const dot = el("span", "", "dot"); dot.style.background = color;
+    td.append(dot, s.ok ? "up" : s.neutral ? "idle" : "down");
+    tr.append(el("td", s.name), td, el("td", s.detail, "muted")); st.append(tr);
+  }
+  P.services.replaceChildren(st);
+  // components
+  const t = el("table"), hd = el("tr"), max = Math.max(...d.components.map(c => c.rss), 1);
+  ["Component", "RAM", "", "CPU", "procs"].forEach(h => hd.append(el("th", h))); t.append(hd);
+  for (const c of d.components) {
+    const tr = el("tr"), name = el("td"), b = el("td"), bar = el("div", "", "bar");
+    bar.style.width = (100 * c.rss / max) + "%"; b.style.width = "30%"; b.append(bar);
+    const det = section("comp/" + c.name, c.name, "", false); det.style.cssText = "border:0;padding:0;margin:0;background:none";
+    for (const p of c.procs) det.append(el("div", `pid ${p.pid} · ${p.rss} MB · ${p.cpu}% · ${p.cmd}`, "muted"));
+    name.append(det);
+    tr.append(name, el("td", c.rss + " MB", "n"), b, el("td", c.cpu + "%", "n"), el("td", String(c.n), "n")); t.append(tr);
+  }
+  P.comps.replaceChildren(t);
+  renderNet(d.net);
+  if (d.point && (!hist.length || hist[hist.length - 1].t !== d.point.t)) { hist.push(d.point); if (hist.length > 1800) hist.shift(); }
+  if (tab === "phone") drawCharts();
+}
+
+function lvl(v, warn, crit) { return v == null ? "var(--crit)" : v >= crit ? "var(--crit)" : v >= warn ? "var(--warn)" : "var(--good)"; }
+function renderNet(n) {
+  if (!n) return;
+  P.probes.replaceChildren(...Object.entries(n.probes || {}).map(([name, r]) => {
+    const t = el("div", "", "tile"), b = el("b", r.ms == null ? "down" : r.ms + " ms"), dot = el("span", "", "dot");
+    dot.style.background = lvl(r.ms, 150, 400);
+    const lab = el("div", "", "muted"); lab.append(dot, name);
+    t.append(lab, b, el("div", r.error || "TCP connect, every 10 s", "muted")); return t;
+  }));
+  const calls = n.calls || [];
+  if (!calls.length) P.calls.replaceChildren(el("div", "No call right now. During a WhatsApp or Meet call this shows its network quality every 2 s.", "muted"));
+  else {
+    const t = el("table"), hd = el("tr");
+    ["Call", "Round trip", "Route", "Receive: loss / jitter / glitches / kbps", "Send: kbps / far-end loss / jitter"].forEach(h => hd.append(el("th", h)));
+    t.append(hd);
+    for (const c of calls) {
+      const tr = el("tr"), q = el("td"), dot = el("span", "", "dot");
+      const bad = Math.max(c.in_loss || 0, c.far_loss || 0, c.in_conceal || 0);
+      dot.style.background = lvl(Math.max(bad * 40, (c.rtt_ms || 0)), 250, 500);
+      q.append(dot, `${c.app} · ${c.state} · ${Math.round(c.age_s / 60)} min`);
+      tr.append(q, el("td", c.rtt_ms != null ? c.rtt_ms + " ms" : "-", "n"), el("td", `${c.route || "-"}${c.net && c.net !== "unknown" ? " · " + c.net : ""}`),
+        el("td", `${c.in_loss}% / ${c.in_jitter_ms ?? "-"} ms / ${c.in_conceal}% / ${c.in_kbps}`, "n"),
+        el("td", `${c.out_kbps} / ${c.far_loss ?? "-"}% / ${c.far_jitter_ms ?? "-"} ms`, "n"));
+      t.append(tr);
+    }
+    P.calls.replaceChildren(t, el("div", "Glitches = audio Chrome had to invent because packets came late or never. Relay = traffic goes through a TURN server (adds delay).", "muted"));
+  }
+  for (const [k, pt] of [["probe", n.probe_point], ["call", n.call_point]]) {
+    const a = NETH[k];
+    if (pt && (!a.length || a[a.length - 1].t !== pt.t)) { a.push(pt); if (a.length > 1800) a.shift(); }
+  }
+}
+
+// ---------- Claude sessions
+const KIND = {desk: "Meeting desk", task: "Nova tasks", memory: "Memory updates", wa: "WhatsApp"};
+let filter = sessionStorage.getItem("kind") || "";
+function stepView(sid, box) {
+  const list = steps[sid];
+  if (!list) { box.replaceChildren(el("div", "loading steps", "muted")); return; }
+  box.replaceChildren(...list.map((s, i) => {
+    if (s.tool === "says") { const d = el("div"); d.append(el("strong", "Claude: "), linked(s.what)); d.style.margin = "6px 0"; return d; }
+    if (s.tool === "prompt") { const d = section(sid + "/p" + i, "Prompt", "", false); d.append(el("pre", s.what)); return d; }
+    const d = section(sid + "/" + i, `${s.tool}: ${s.note || s.what.slice(0, 110)}`, s.status, s.status === "running");
+    d.append(el("div", when(s.time), "muted"), el("pre", s.what));
+    if (s.output) d.append(el("pre", s.output));
+    return d;
+  }));
+}
+async function loadSteps(sid) {
+  try {
+    const r = await fetch("/api/session?id=" + encodeURIComponent(sid), {headers: {Authorization: "Bearer " + token}});
+    if (!r.ok) return;
+    steps[sid] = (await r.json()).steps;
+    const box = document.querySelector(`[data-steps="${CSS.escape(sid)}"]`);
+    if (box) keepScroll(() => stepView(sid, box));
+  } catch (e) {}
+}
+setInterval(() => {                         // stream live sessions that are open: refresh their steps every 2 s
+  if (!work || tab !== "claude") return;
+  for (const s of work.sessions || []) if (s.live && openState[s.id]) loadSteps(s.id);
+}, 2000);
+
+function renderClaude() {
+  const v = $("v-claude"), list = work.sessions || [];
+  const live = list.filter(s => s.live).length, today = list.filter(s => Date.now() / 1000 - s.mtime < 86400);
+  const sum = k => today.reduce((a, s) => a + s[k], 0);
+  const head = el("div", "", "tiles");
+  for (const [label, val, sub] of [["Running now", live, "Claude sessions"], ["Last 24 h", today.length, "sessions"],
+       ["Tokens out (24 h)", tok(sum("out")), "generated"], ["Tokens in (24 h)", tok(sum("in") + sum("cache")), "incl. cache"]]) {
+    const t = el("div", "", "tile"); t.append(el("div", label, "muted"), el("b", String(val)), el("div", sub, "muted")); head.append(t);
+  }
+  const bar = el("nav");
+  for (const [k, label] of [["", "All"], ...Object.entries(KIND)]) {
+    const b = el("button", label); b.setAttribute("aria-selected", filter === k);
+    b.onclick = () => { filter = k; sessionStorage.setItem("kind", k); renderClaude(); }; bar.append(b);
+  }
+  const items = list.filter(s => !filter || s.kind === filter).map(s => {
+    const isNew = !firstWork && !seen.has(s.id);
+    const d = section(s.id, `${s.label} · ${ago(s.end || s.mtime)} · ${s.tools} tools · ${tok(s.out)} out`, s.live ? "live" : "done", s.live, isNew ? "new" : "");
+    d.dataset.sid = s.id;
+    d.append(el("div", `${s.model || "?"} · started ${when(s.start)} · last activity ${when(s.end)} · in ${tok(s.in)} + cache ${tok(s.cache)} / out ${tok(s.out)}`, "muted"));
+    if (s.answer) { const a = el("div"); a.append(el("strong", "Last answer: "), linked(s.answer)); d.append(a); }
+    const box = el("div"); box.dataset.steps = s.id; d.append(box);
+    if (d.open) { stepView(s.id, box); if (!steps[s.id]) loadSteps(s.id); }
+    return d;
+  });
+  list.forEach(s => seen.add(s.id));
+  keepScroll(() => v.replaceChildren(head, bar, ...(items.length ? items : [el("p", "No sessions yet.", "muted")])));
+}
+
+// ---------- queue
+function renderQueue() {
+  const v = $("v-queue"), q = work.queue || [];
+  const counts = ["active", "queued", "done", "failed"].map(k => `${q.filter(t => t.state === k).length} ${k}`).join(" · ");
+  keepScroll(() => v.replaceChildren(el("p", counts, "muted"), ...q.map(t => {
+    const d = section("q/" + t.id, t.task.slice(0, 140), t.state, t.state === "active");
+    const took = t.started ? Math.round((t.finished || Date.now() / 1000) - t.started) + "s" : "-";
+    d.append(el("div", `Requester: ${t.requester || "-"} | queued ${when(t.created)} | started ${when(t.started)} | finished ${when(t.finished)} | took ${took}`, "muted"));
+    d.append(el("p", t.task));
+    const r = t.result;
+    for (const [label, val] of [["Result", r.say], ["Question", r.question], ["Links", [r.chat, r.url].filter(Boolean).join("\n")], ["Repository", r.repo && "https://github.com/" + r.repo]])
+      if (val) d.append(el("strong", label), linked(val));
+    const sess = (work.sessions || []).filter(s => s.id.startsWith(t.session + "/"));
+    if (sess.length) { const b = el("button", `Open its Claude session${sess.length > 1 ? "s" : ""}`);
+      b.onclick = () => { sess.forEach(s => openState[s.id] = true); filter = ""; showTab("claude"); renderClaude(); }; d.append(b); }
+    return d;
+  })));
+}
+
+// ---------- memory, logs
+function renderMemory() {
+  const m = work.memory || {}, v = $("v-memory");
+  const box = el("div", "", "card"); box.append(el("div", `memory.md · updated ${when(m.updated)}`, "muted"), el("pre", m.memory || "(empty)"));
+  box.lastChild.style.maxHeight = "none";
+  const pr = el("div", "", "card"); pr.append(el("div", "Projects Nova built", "muted"));
+  for (const p of m.projects || []) { const d = el("div"); d.style.margin = "6px 0";
+    d.append(el("strong", p.repo || p.url || "-"), linked([p.url, p.task].filter(Boolean).join(" · "))); pr.append(d); }
+  keepScroll(() => v.replaceChildren(box, pr));
+}
+function renderLogs() {
+  const v = $("v-logs"), l = work.logs || {};
+  keepScroll(() => v.replaceChildren(...Object.entries(l).map(([name, x]) => {
+    const d = section("log/" + name, `${name} · written ${ago(x.mtime)}`, "", false); d.append(el("pre", x.text)); return d;
+  })));
+}
+function renderWork(w) {
+  work = w;
+  renderClaude(); renderQueue(); renderMemory(); renderLogs();
+  firstWork = false;
+}
+
+// ---------- polling (a long-lived stream stalls behind Cloudflare's quick tunnel)
+let workHash = "", tick = 0;
+async function api(path) {
+  const r = await fetch(path, {headers: {Authorization: "Bearer " + token}, cache: "no-store"});
+  if (r.status === 401) { token = ""; sessionStorage.removeItem("t"); throw new Error("unauthorized"); }
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+async function connect() {
+  if (!token) { $("login").hidden = false; $("status").textContent = "enter the access token"; return; }
+  try {
+    if (!hist.length) { const h = await api("/api/history"); hist = h.sys; NETH.probe = h.probe; NETH.call = h.call; }
+    $("login").hidden = true;
+    const d = await api("/api/system");
+    renderSystem(d);
+    $("status").textContent = "· live · " + new Date(d.t * 1000).toLocaleTimeString();
+    if (tick++ % 2 === 0) {
+      const w = await api("/api/work?h=" + workHash);
+      if (w.work) { workHash = w.h; renderWork(w.work); }
+    }
+    setTimeout(connect, 2000);
+  } catch (e) {
+    $("status").textContent = "· reconnecting (" + e.message + ")";
+    setTimeout(connect, token ? 3000 : 0);
+  }
+}
+$("login").addEventListener("submit", e => { e.preventDefault(); token = $("key").value.trim(); sessionStorage.setItem("t", token); connect(); });
+showTab(tab);
+connect();
+</script>
+</body>
+</html>

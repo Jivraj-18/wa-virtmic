@@ -40,6 +40,12 @@ def enabled():
 def install(page, log=print):
     """Hook getUserMedia in `page` now and in every new document of its context (survives WhatsApp's reloads while
     this Playwright connection lives). WhatsApp calls getUserMedia per call, so installing before the call is enough."""
+    try:                       # call-quality stats for the dashboard (rtc_stats.py): records connections, changes nothing
+        import rtc_stats
+        page.context.add_init_script(rtc_stats.JS)
+        page.evaluate(rtc_stats.JS)
+    except Exception as e:
+        log(f"rtc_stats: hook not installed: {type(e).__name__}: {e}")
     if not enabled():
         return False
     try:

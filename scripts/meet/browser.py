@@ -720,6 +720,11 @@ def _cmd_join(a):
                 print("maya: grant_permissions failed:", e)
         if mic_apm.enabled():  # Chrome's echo cancel / noise suppression / AGC damage a clean digital voice
             await ctx.add_init_script(mic_apm.JS)
+        try:                   # call-quality stats for the dashboard (scripts/rtc_stats.py); changes nothing in Meet
+            import rtc_stats
+            await ctx.add_init_script(rtc_stats.JS)
+        except Exception as e:
+            print("maya: rtc_stats hook not installed:", e)
         page = await meet_page(ctx)
         try:
             await join_meet(page, a.url, name=a.name, lobby_timeout=a.lobby_timeout, on_phase=phase)
