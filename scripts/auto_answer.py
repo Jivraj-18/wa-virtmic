@@ -233,6 +233,22 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
     # It used to rely on the model calling an end_call tool, which it often "promised" but never did.
     from hangup import HangupWatcher
     watcher = HangupWatcher(lambda reason: hangup.set(), log=log)
+    # Escalation to a person on THIS phone (handoff.py): the AI says "let me connect you to a person", the phone
+    # rings, and the human answers on http://localhost:8787 with the phone's own mic/speaker; the AI is then stopped.
+    import handoff
+    ho = handoff.Client()
+    ho_on = mode == "realtime" and ho.available()
+    on_line = watcher.feed
+    ho_text = ""
+    if ho_on:
+        ho.call_started(caller, num)
+        esc = handoff.EscalationWatcher(ho.ring, log=log)
+        ho_text = handoff.INSTRUCTIONS
+
+        def on_line(who, text):
+            watcher.feed(who, text)
+            esc.feed(who, text)
+        log(f"handoff: on (a person can take over on {handoff.URL})")
 
     async def on_tool(name, args, ag):
         if name == "end_call":
@@ -251,10 +267,10 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             e2 = tools.agent_kwargs(ctx["path"], d, log=log)
             agent = make_agent(ctx, caller, extra={
                 "tools": e2["tools"],
-                "on_line": watcher.feed,
+                "on_line": on_line,
                 "on_tool": tools.chain_on_tool(e2["on_tool"], on_tool),  # E2 returns None for end_call
                 "on_event": e2["on_event"],  # needed for the holding-line logic
-                "instructions": build_instructions(ctx, caller) + hang + e2["instructions_suffix"]},
+                "instructions": build_instructions(ctx, caller) + hang + ho_text + e2["instructions_suffix"]},
                 transcript=d / "transcript_live.txt", log=log)
         else:
             kw = {} if speak_first else {"greeting": None}
@@ -270,8 +286,8 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                                       "Don't greet again; wait for their reply and continue from there.")
                     instant_greeting = True
             log(f"voice engine: {engine}")
-            agent = AgentCls(transcript=d / "transcript_live.txt", log=log, on_line=watcher.feed,
-                          instructions=INSTRUCTIONS + hang + extra_instructions + card_text, **kw)
+            agent = AgentCls(transcript=d / "transcript_live.txt", log=log, on_line=on_line,
+                          instructions=INSTRUCTIONS + hang + ho_text + extra_instructions + card_text, **kw)
         th = agent.start_thread(max_secs)
         # Mic wait + stream routing now run WHILE the agent connects (ICE + session setup take seconds); before,
         # they ran first and the caller heard ~15 s of silence after we picked up.
@@ -293,6 +309,7 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
     dumped = clicked = False
     silence = CallerSilence()
     recorded = bool(recs)
+    human = told_missed = False
     while time.time() - t0 < max_secs:  # record until hang-up (call UI + Chrome mic both gone for 3 s)
         n += 1
         beat()
@@ -307,6 +324,23 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 (HERE / "call_ui_incall.html").write_text(page.content()); dumped = True
             except Exception:
                 pass
+        if ho_on:
+            hs = ho.state
+            if hs == "connected" and not human:   # the person took over: the AI goes quiet for the rest of the call
+                human = True
+                log(f"handoff: a person took over the call at {time.time() - t0:.0f}s - stopping the AI")
+                if agent:
+                    agent.stop.set()
+            elif hs in ("missed", "declined") and not told_missed and not human:
+                told_missed = True
+                log(f"handoff: nobody took the call ({hs}) - the AI carries on")
+                if agent and hasattr(agent, "respond_threadsafe"):   # realtime engine: the model says it itself
+                    agent.respond_threadsafe("Tell the caller nobody could come to the phone right now, so you'll "
+                                             "take a message and make sure it's passed on. Then ask for the message.")
+                else:   # GPT-Live can't be prompted mid-call: a recorded line in the same voice
+                    threading.Thread(target=play_wav, args=(str(HERE / "handoff_missed.wav"),), daemon=True).start()
+            elif hs == "hangup":
+                hangup.set()
         if hangup.is_set() and not clicked:
             try:
                 how = page.evaluate(END_CALL_JS)
@@ -339,6 +373,8 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
             how = f"error {e}"
         log(f"max call length {max_secs}s reached - ending the call (end call: {how})")
     silence.stop()
+    if ho_on:
+        ho.call_ended()
     if agent:
         agent.stop.set()
         th.join(5)
@@ -423,6 +459,13 @@ def main():
              else os.environ.get("REALTIME_VOICE", "marin"))
     synth_wav(a.greeting, greeting_wav, voice=voice)
     log(f"greeting pre-synthesized in {time.time() - t:.1f}s -> {greeting_wav}")
+    try:   # handoff.py: played on GPT-Live calls when nobody answers the escalation
+        missed = HERE / "handoff_missed.wav"
+        if not missed.exists():
+            synth_wav("Sorry, nobody could come to the phone right now. Tell me your message and I'll make sure "
+                      "it's passed on.", str(missed), voice=voice)
+    except Exception as e:
+        log(f"handoff line not synthesized: {type(e).__name__}: {e}")
     with sync_playwright() as pw:
         b = pw.chromium.connect_over_cdp("http://localhost:9222")
         cdp = b.new_browser_cdp_session()

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Call takeover</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f4f4f2; --fg:#1b1b1a; --muted:#6b6b66; --card:#fff; --line:#e3e3df;
+          --go:#1f8a4c; --stop:#c8372d; --warn:#b26b00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141413; --fg:#ececea; --muted:#9a9a94; --card:#1e1e1d; --line:#2e2e2c; } }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100dvh; display:flex; flex-direction:column; justify-content:space-between;
+         background:var(--bg); color:var(--fg); font:16px/1.45 system-ui, sans-serif; padding:28px 20px 36px; }
+  .top { text-align:center; }
+  .badge { display:inline-block; font-size:13px; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+  h1 { font-size:30px; line-height:1.2; margin:18px 0 6px; font-weight:650; overflow-wrap:anywhere; }
+  .sub { color:var(--muted); margin:0; }
+  .reason { margin:22px auto 0; max-width:30em; background:var(--card); border:1px solid var(--line); border-radius:14px;
+            padding:14px 16px; text-align:left; }
+  .reason b { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-bottom:4px; font-weight:600; }
+  .timer { font-variant-numeric: tabular-nums; font-size:20px; margin-top:10px; color:var(--muted); }
+  .buttons { display:flex; gap:28px; justify-content:center; }
+  .btn { width:84px; display:flex; flex-direction:column; align-items:center; gap:8px; background:none; border:0;
+         color:var(--fg); font:inherit; font-size:14px; padding:0; }
+  .btn i { width:72px; height:72px; border-radius:50%; display:grid; place-items:center; font-style:normal; font-size:28px; color:#fff; }
+  .btn:disabled { opacity:.4; }
+  .go i { background:var(--go); } .stop i { background:var(--stop); } .neutral i { background:#5b5b57; }
+  .neutral.on i { background:var(--warn); }
+  .ringing h1 { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity:.55; } }
+  @media (prefers-reduced-motion: reduce) { .ringing h1 { animation:none; } }
+  .err { color:var(--stop); text-align:center; min-height:1.4em; margin:12px 0 0; }
+</style>
+</head>
+<body>
+  <div class="top" id="top">
+    <span class="badge" id="badge">Call takeover</span>
+    <h1 id="title">Connecting…</h1>
+    <p class="sub" id="sub"></p>
+    <div class="timer" id="timer"></div>
+    <div class="reason" id="reasonBox" hidden><b>What they need</b><span id="reason"></span></div>
+  </div>
+  <div>
+    <div class="buttons" id="buttons"></div>
+    <p class="err" id="err"></p>
+  </div>
+  <audio id="remote" autoplay playsinline></audio>
+<script>
+const $ = id => document.getElementById(id);
+let st = {}, pc = null, mic = null, muted = false, joinedAt = 0, myCall = false;
+
+const post = (path, body = {}) => fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify(body)}).then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; });
+
+function btn(cls, icon, label, onclick) {
+  const b = document.createElement('button');
+  b.className = 'btn ' + cls; b.innerHTML = `<i aria-hidden="true">${icon}</i>${label}`; b.onclick = onclick;
+  return b;
+}
+
+async function takeOver() {
+  $('err').textContent = '';
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+    pc = new RTCPeerConnection();
+    mic.getTracks().forEach(t => pc.addTrack(t, mic));
+    pc.ontrack = e => { $('remote').srcObject = e.streams[0] || new MediaStream([e.track]); $('remote').play().catch(() => {}); };
+    pc.onconnectionstatechange = () => { if (pc && pc.connectionState === 'failed') $('err').textContent = 'Audio link failed. Tap Rejoin.'; render(); };
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise(res => { if (pc.iceGatheringState === 'complete') return res();
+      pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && res(); setTimeout(res, 3000); });
+    const ans = await post('/accept', {sdp: pc.localDescription.sdp, type: pc.localDescription.type});
+    await pc.setRemoteDescription(ans);
+    joinedAt = Date.now(); myCall = true; muted = false;
+  } catch (e) {
+    $('err').textContent = e.name === 'NotAllowedError' ? 'Chrome needs microphone permission for this page.' : 'Could not join: ' + e.message;
+    drop();
+  }
+  poll();
+}
+
+function drop() {
+  if (pc) { pc.close(); pc = null; }
+  if (mic) { mic.getTracks().forEach(t => t.stop()); mic = null; }
+  myCall = false;
+}
+
+function toggleMute() { muted = !muted; mic && mic.getTracks().forEach(t => t.enabled = !muted); render(); }
+
+function render() {
+  const s = st.state || 'offline', who = st.caller || 'Unknown caller';
+  document.body.className = s;
+  const B = $('buttons'); B.replaceChildren();
+  $('reasonBox').hidden = !(st.reason && (s === 'ringing' || s === 'connected'));
+  $('reason').textContent = st.reason || '';
+  $('timer').textContent = '';
+  const T = (badge, title, sub) => { $('badge').textContent = badge; $('title').textContent = title; $('sub').textContent = sub; };
+  if (s === 'ringing') {
+    T('Needs a person', who, 'The AI is keeping them on hold');
+    B.append(btn('stop', '✕', 'Decline', () => post('/decline').then(poll)), btn('go', '✆', 'Answer', takeOver));
+  } else if (s === 'connected' && myCall && pc) {
+    T('You are on the call', who, muted ? 'You are muted' : 'The AI is off. They can hear you.');
+    const sec = Math.floor((Date.now() - joinedAt) / 1000);
+    $('timer').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    B.append(btn('neutral' + (muted ? ' on' : ''), muted ? '🔇' : '🎙', muted ? 'Unmute' : 'Mute', toggleMute),
+             btn('stop', '✆', 'Hang up', () => post('/hangup').then(() => { drop(); poll(); })));
+  } else if (s === 'connected') {
+    T('Taken over', who, 'Someone took over this call, maybe from another tab.');
+    B.append(btn('go', '↻', 'Rejoin', takeOver));
+  } else if (s === 'live' || s === 'missed' || s === 'declined') {
+    T('AI is on a call', who, s === 'missed' ? 'You missed the escalation. You can still take over.' :
+      s === 'declined' ? 'You declined. The AI is handling it.' : 'You can step in at any time.');
+    B.append(btn('go', '✆', 'Take over', takeOver));
+  } else if (s === 'hangup') {
+    T('Hanging up', who, '');
+  } else if (s === 'idle') {
+    T('Call takeover', 'No call right now', 'When the AI needs you, the phone rings and this page opens.');
+  } else {
+    T('Call takeover', 'Server not running', 'Start it with: python3 scripts/handoff.py serve');
+  }
+  if (myCall && s !== 'connected') drop();   // call ended or hung up on the WhatsApp side
+}
+
+let timer = null;
+async function poll() {
+  clearTimeout(timer);
+  try { st = await (await fetch('/state', {cache: 'no-store'})).json(); } catch { st = {}; }
+  render();
+  timer = setTimeout(poll, st.state === 'idle' ? 2000 : 700);
+}
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && poll());
+poll();
+</script>
+</body>
+</html>

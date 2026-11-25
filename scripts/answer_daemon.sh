@@ -55,11 +55,13 @@ case "${1:-start}" in
   stop)
     alive "$PIDFILE" && kill "$(cat "$PIDFILE")" && echo "supervisor stopped"
     alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" && echo "auto_answer.py stopped"
+    alive "$RUN/handoff.pid" && kill "$(cat "$RUN/handoff.pid")" && echo "handoff.py stopped"
     pkill -f "^$PY -u $S/auto_answer.py" && echo "stray auto_answer.py stopped"
     rm -f "$PIDFILE" "$AA_PIDFILE"; exit 0 ;;
   status)
     alive "$PIDFILE" && echo "supervisor: running (pid $(cat "$PIDFILE"))" || echo "supervisor: NOT running"
     alive "$AA_PIDFILE" && echo "auto_answer: running (pid $(cat "$AA_PIDFILE"))" || echo "auto_answer: NOT running"
+    alive "$RUN/handoff.pid" && echo "handoff: running (pid $(cat "$RUN/handoff.pid")) on http://localhost:8787" || echo "handoff: NOT running"
     cdp_ok && echo "chrome CDP: ok" || echo "chrome CDP: NOT responding"
     tail -5 "$LOG"; exit 0 ;;
   start)
@@ -79,6 +81,7 @@ fi
 echo $$ >"$PIDFILE"
 alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" 2>/dev/null
 pkill -f "^$PY -u $S/auto_answer.py" 2>/dev/null
+pkill -f "^$PY -u $S/handoff.py serve" 2>/dev/null
 pkill -f "^$XVFB_BIN $WA_DISPLAY" 2>/dev/null
 pulseaudio --kill 2>/dev/null
 sleep 3
@@ -157,10 +160,20 @@ start_aa() {
   log "auto_answer.py started (pid $(cat "$AA_PIDFILE"), engine $VOICE_ENGINE)"
 }
 
+HO_LOG="$S/handoff.log"; HO_PIDFILE="$RUN/handoff.pid"
+ensure_handoff() { # escalation-to-a-person server (handoff.py): rings the phone, serves the takeover page on :8787
+  [ "${HANDOFF:-1}" = 0 ] && return 0
+  alive "$HO_PIDFILE" && return 0
+  cap "$HO_LOG" 1000000
+  nohup "$PY" -u "$S/handoff.py" serve >>"$HO_LOG" 2>&1 </dev/null &
+  echo $! >"$HO_PIDFILE"; log "handoff.py started (pid $!)"
+}
+
 while true; do
   cap "$LOG" 2000000; cap "$AA_LOG" 5000000
   ensure_audio
   ensure_x
+  ensure_handoff
   if [ -z "$(chrome_pids)" ]; then restart_chrome "not running"
   elif ! cdp_ok; then
     cdp_fail=$((cdp_fail + 1)); log "Chrome CDP not responding ($cdp_fail/3)"
