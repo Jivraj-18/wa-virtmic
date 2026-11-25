@@ -245,6 +245,8 @@ class Maya:
         self.unmute = None         # async fn() -> bool: mic on before a hand-raise report (host may have muted her)
         self.spoke_here = False    # Nova said something in THIS meeting (an intro can then be shortened/skipped)
         self.mute = None           # async fn() -> bool: mic off (set by browser._cmd_join)
+        self.mic_on = None         # async fn() -> bool: is her Meet mic on (set by browser._cmd_join)
+        self.unmuting = False
         self.hand = None           # async fn(up: bool) -> bool: raise / lower her hand in Meet
         self.chat_send = None      # async fn(text) -> bool, set by browser._cmd_join   # set by browser._cmd_join (task reports go back to this meeting)
         self.floor = None          # raised hand waiting for {"who"} to give Nova the floor (set by browser.watch)
@@ -287,11 +289,13 @@ class Maya:
             "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": realtime_agent.VOICE}}
         self.engine = os.environ.get("NOVA_ENGINE", "live")   # live = GPT-Live (sim 2026-11-25: live 16/17, realtime 13/17)
         if self.engine == "live":   # GPT-Live, full duplex, decides itself when to talk (scripts/meet/live_meet.py)
-            from meet.live_meet import MeetLiveAgent, LIVE_INSTRUCTIONS, OWNER
+            from meet.live_meet import MeetLiveAgent, LIVE_INSTRUCTIONS, OWNER, long_memory
             hist = ("\n\nEARLIER IN THIS MEETING (before you (re)connected):\n" + "\n".join(self.history[-60:])[-5000:]
                     if self.history else "")
             self.agent = MeetLiveAgent(Path(transcript) if transcript else None, log=log,
-                                       instructions=LIVE_INSTRUCTIONS.format(name=NAME, owner=OWNER) + past_work() + hist,
+                                       instructions=LIVE_INSTRUCTIONS.format(name=NAME, owner=OWNER) + past_work() +
+                                       "\n\nYOUR LONG-TERM MEMORY (from earlier meetings; people, preferences, open "
+                                       "items - for details hand off):\n" + long_memory()[-6000:] + hist,
                                        in_device=in_device, out_device=out_device, on_line=self.on_live_line, maya=self)
             self.agent.voice.on_turn = self._live_turn
             self.agent.voice.on_own_done = lambda: setattr(self, "play_until", 0.0)
@@ -467,6 +471,19 @@ class Maya:
         """GPT-Live starts a turn. With her hand up for a report, that turn IS her being called on (the duplex model
         itself decided someone is talking to her; no separate judge): drop it and play the report instead."""
         fl = self.floor
+        # She's answering someone (the duplex model decided): muted or not - by herself or by the host - she must be
+        # heard (owner, 2026-11-25). unmute() is a no-op when the mic is already on.
+        if self.unmute and not self.unmuting:
+            self.unmuting = True
+
+            async def be_heard():
+                try:
+                    was_on = await self.mic_on() if self.mic_on else None
+                    if was_on is False:
+                        self.event("unmute_to_answer", ok=await self.unmute())
+                finally:
+                    self.unmuting = False
+            asyncio.get_running_loop().create_task(be_heard())
         if not fl or fl.get("spoken") or not fl.get("x"):
             return None
         sp, _ = self.caption_now()
@@ -517,9 +534,7 @@ class Maya:
         """Her own Meet controls, asked for by the live voice through a hand-off ("raise my hand", "unmute me"):
         plain button clicks, no back office. Returns what to tell her, or None if the request isn't one of these."""
         r = request.lower().strip()
-        if r in ("raise", "lower", "mute", "unmute", "leave"):      # from the desk's "CONTROL: <act>"
-            act = r
-        else:
+        if True:
             acts = [("leave", r"\bleave (the |this )?(call|meeting)\b|\b(drop|hang) (off|up)\b"),("lower", r"\b(lower|put down|take down)\b.*\bhand\b|\bhand\b.*\bdown\b"),
                     ("raise", r"\b(raise|put up)\b.*\bhand\b|\bhand\b.*\bup\b"),
                     ("unmute", r"\bunmute\b|\b(mic|microphone)\b.*\bon\b|turn on .*\b(mic|microphone)\b"),

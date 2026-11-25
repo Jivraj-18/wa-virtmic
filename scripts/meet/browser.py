@@ -409,6 +409,10 @@ async def unmute(page) -> bool:
     return await page.get_by_role("button", name=on).count() > 0
 
 
+async def mic_is_on(page) -> bool:
+    return await page.get_by_role("button", name=re.compile(r"^turn off (microphone|mic)", re.I)).count() > 0
+
+
 async def mute(page) -> bool:
     """Turn Nova's mic off. True if it is off now."""
     off_now = re.compile(r"^turn on (microphone|mic)", re.I)
@@ -627,6 +631,20 @@ def stop_recording(procs):
                 os.killpg(p.pid, signal.SIGTERM)
             except Exception:
                 pass
+
+
+def spawn_memory_update(run_dir):
+    """After the meeting: distil both records into ~/.config/nova/memory.md (scripts/nova/memory.py), detached."""
+    import subprocess
+    if os.environ.get("NOVA_SIM") == "1" and not os.environ.get("NOVA_MEMORY"):
+        return    # simulations must not write the real memory
+    try:
+        log = open(Path(run_dir) / "memory.log", "ab")
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve().parents[1] / "nova" / "memory.py"), "update",
+                          str(run_dir)], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                         start_new_session=True)
+    except Exception as e:
+        print(f"maya: memory update not started: {e}")
 
 
 def spawn_notes(run_dir, log=print):
@@ -855,6 +873,7 @@ def _cmd_join(a):
                 maya.chat_send = lambda text: send_chat(page, text)
                 maya.unmute = lambda: unmute(page)
                 maya.mute = lambda: mute(page)
+                maya.mic_on = lambda: mic_is_on(page)
                 maya.hand = lambda up: raise_hand(page, up)
                 state["maya"] = maya
                 if watch_task is None or watch_task.done():
@@ -890,6 +909,7 @@ def _cmd_join(a):
             # notes only with NOVA_NOTES=1 (scripts/nova/notes.py can also be run by hand).
             if os.environ.get("NOVA_NOTES") == "1" and (run_dir / "who_said_what.txt").stat().st_size:
                 spawn_notes(run_dir)
+            spawn_memory_update(run_dir)
 
     asyncio.run(go())
 
