@@ -24,6 +24,7 @@ sys.path.insert(0, str(HERE))
 import gateway  # noqa: E402
 
 MODEL = os.environ.get("LIVE_MODEL", "gpt-live-1")
+START_TIMEOUT = float(os.environ.get("LIVE_START_TIMEOUT", "20"))   # s from POST to session.started
 VOICE = os.environ.get("LIVE_VOICE", "marin")
 RATE = 48000                  # WebRTC/Opus native rate; avoids resampling on the way in
 FRAME = RATE // 50            # 20 ms
@@ -48,6 +49,7 @@ class LiveAgent:
         elif greeting:
             self.instructions += f"\nWhen the call connects: {greeting}"
         self.in_device, self.out_device = in_device, out_device
+        self.out_filter = None   # fn(pcm frame) -> bytes to play instead (b"" = drop); None = play the model as is
         self.stop = threading.Event()
         self.t0 = time.time()
         self._buf = {"CALLER": "", "AI": ""}
@@ -220,6 +222,10 @@ class LiveAgent:
                     self.log(f"live: AI audio {backlog * 0.02:.1f}s behind - dropping silence to catch up")
                 for out in rs.resample(fr):
                     pcm = bytes(out.planes[0])[: out.samples * 2]
+                    if self.out_filter is not None:   # Meet (live_meet.py): ONE output stream, Nova's own audio
+                        pcm = self.out_filter(pcm)    # (reports) replaces the model's frames; None = drop
+                        if not pcm:
+                            continue
                     if backlog > 5 and int(np.abs(np.frombuffer(pcm, np.int16)).max(initial=0)) < 64:  # silent
                         w["drop"] += 1
                         continue
@@ -270,12 +276,22 @@ class LiveAgent:
                             "delegation": {"type": "client", "acknowledgement_delay_ms": 800}},
                 "transport": {"type": "webrtc", "sdp": pc.localDescription.sdp}}
         t_post = time.time()
-        req = urllib.request.Request(gateway.base() + "/openai/v1/live/sessions", data=json.dumps(body).encode(),
-                                     headers={**gateway.auth_header(), "Content-Type": "application/json"})
-        res = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(req, timeout=30)))
-        self.log(f"live: session {res['session']['id'][:16]}… created in {time.time() - t_post:.1f}s ({MODEL})")
-        await pc.setRemoteDescription(RTCSessionDescription(res["transport"]["sdp"], "answer"))
-        await asyncio.wait_for(started, 20)
+        try:   # if the session doesn't come up, close what we opened (a leaked one kept playing and stacked up)
+            req = urllib.request.Request(gateway.base() + "/openai/v1/live/sessions", data=json.dumps(body).encode(),
+                                         headers={**gateway.auth_header(), "Content-Type": "application/json"})
+            res = await asyncio.to_thread(lambda: json.load(urllib.request.urlopen(req, timeout=max(30, START_TIMEOUT))))
+            self.log(f"live: session {res['session']['id'][:16]}… created in {time.time() - t_post:.1f}s ({MODEL})")
+            await pc.setRemoteDescription(RTCSessionDescription(res["transport"]["sdp"], "answer"))
+            await asyncio.wait_for(started, START_TIMEOUT)
+        except BaseException:
+            for t in tasks:
+                t.cancel()
+            await pc.close()
+            for p_ in (parec, pacat):
+                if p_.returncode is None:
+                    p_.kill()
+            self.log("live: session did not start - closed it")
+            raise
         self.log(f"live: ready {time.time() - t_post:.1f}s after POST")
 
         end = time.time() + max_seconds

@@ -16,7 +16,7 @@ How it decides to talk
   addressing.py; only "Maya, ..." style utterances trigger agent.respond(). While Maya talks, a local energy VAD on
   the meeting audio stops her within ~0.1-0.3 s if anyone talks over her (plus the server's own interrupt).
 """
-import argparse, asyncio, base64, json, os, re, sys, time
+import argparse, asyncio, base64, json, os, re, sys, tempfile, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -243,6 +243,9 @@ class Maya:
         self.leave_requested = False
         self.meeting_url, self.meeting_title = "", ""
         self.unmute = None         # async fn() -> bool: mic on before a hand-raise report (host may have muted her)
+        self.spoke_here = False    # Nova said something in THIS meeting (an intro can then be shortened/skipped)
+        self.mute = None           # async fn() -> bool: mic off (set by browser._cmd_join)
+        self.hand = None           # async fn(up: bool) -> bool: raise / lower her hand in Meet
         self.chat_send = None      # async fn(text) -> bool, set by browser._cmd_join   # set by browser._cmd_join (task reports go back to this meeting)
         self.floor = None          # raised hand waiting for {"who"} to give Nova the floor (set by browser.watch)
         self.floor_checking = False
@@ -282,14 +285,16 @@ class Maya:
                           f"A team video meeting in English or Hinglish (Hindi-English mix). People talk to the AI "
                           f"assistant, whose name is {NAME}: 'Hi {NAME}', '{NAME}, can you hear me?', 'okay {NAME}'.")}},
             "output": {"format": {"type": "audio/pcm", "rate": RATE}, "voice": realtime_agent.VOICE}}
-        self.engine = os.environ.get("NOVA_ENGINE", "realtime")
+        self.engine = os.environ.get("NOVA_ENGINE", "live")   # live = GPT-Live (sim 2026-11-25: live 16/17, realtime 13/17)
         if self.engine == "live":   # GPT-Live, full duplex, decides itself when to talk (scripts/meet/live_meet.py)
-            from meet.live_meet import MeetLiveAgent, LIVE_INSTRUCTIONS
+            from meet.live_meet import MeetLiveAgent, LIVE_INSTRUCTIONS, OWNER
             hist = ("\n\nEARLIER IN THIS MEETING (before you (re)connected):\n" + "\n".join(self.history[-60:])[-5000:]
                     if self.history else "")
             self.agent = MeetLiveAgent(Path(transcript) if transcript else None, log=log,
-                                       instructions=LIVE_INSTRUCTIONS.format(name=NAME) + past_work() + hist,
+                                       instructions=LIVE_INSTRUCTIONS.format(name=NAME, owner=OWNER) + past_work() + hist,
                                        in_device=in_device, out_device=out_device, on_line=self.on_live_line, maya=self)
+            self.agent.voice.on_turn = self._live_turn
+            self.agent.voice.on_own_done = lambda: setattr(self, "play_until", 0.0)
             return
         self.agent = Agent(Path(transcript) if transcript else None, log=log, instructions=INSTRUCTIONS + past_work(),
                            greeting=None, in_device=in_device, out_device=out_device,
@@ -321,6 +326,10 @@ class Maya:
     def on_live_line(self, who, text):
         """GPT-Live transcript lines (its own speech-to-text of the meeting and of what it said)."""
         if who == "AI":
+            if self.agent.voice.turn_dropped:   # cut by her report (one voice at a time): nobody heard it
+                self._remember(f"[{NAME}, not heard] {text}")
+                return
+            self.spoke_here = True
             self._remember(f"[{NAME} said] {text}")
             self.last_exchange = (self.last_exchange[0], text)
             self.followup_until = time.time() + FOLLOWUP_S
@@ -419,6 +428,8 @@ class Maya:
         self._remember(line)
         self.suggester.add(speaker, text)
         await self.inject(line)
+        if self.engine == "live":
+            return   # GPT-Live hears the meeting itself and decides when to answer; floor = her own turn (_live_turn)
         if self.floor and await self.check_floor(speaker, text):
             return
         if self.engine == "live":
@@ -452,12 +463,116 @@ class Maya:
             await self.say_floor(speaker, text)
         return ok
 
+    def _live_turn(self):
+        """GPT-Live starts a turn. With her hand up for a report, that turn IS her being called on (the duplex model
+        itself decided someone is talking to her; no separate judge): drop it and play the report instead."""
+        fl = self.floor
+        if not fl or fl.get("spoken") or not fl.get("x"):
+            return None
+        sp, _ = self.caption_now()
+        recent = [s for t_, s in self.recent_speakers if time.time() - t_ < 15]
+        sp = sp or (recent[-1] if recent else "")
+        # hand up = whoever she answers now called on her: the report comes first (meeting etiquette, no judge).
+        # She should hand off now and say the report LIVE (report_for_handoff); unmute at once so she's heard.
+        if fl.get("called_at"):
+            return None
+        fl["called_at"] = time.time()
+        self.event("floor_by_turn", speaker=sp)
+        loop = asyncio.get_running_loop()
+
+        async def go():
+            if self.unmute:
+                self.event("unmute", ok=await self.unmute())
+            await asyncio.sleep(30)
+            if not fl.get("spoken"):       # she never handed off for it: the next call-on tries again
+                fl.pop("called_at", None)
+                self.event("report_not_fetched")
+        loop.create_task(go())
+        return None
+
+    def report_for_handoff(self):
+        """Her hand is up and she just handed off after being called on: return the report for her to say LIVE
+        (in her own words, so she knows it and can answer questions about it), or None."""
+        fl = self.floor
+        if self.engine != "live" or not fl or fl.get("spoken") or not fl.get("x"):
+            return None
+        # GPT-Live hands off BEFORE it starts talking when called on (sim 2026-11-25), so a hand-off while her hand
+        # is up IS the call-on: the report comes first (etiquette), anything else they asked is her next hand-off.
+        x = fl["x"]
+        text = x["text"]
+        if self.spoke_here and x.get("if_spoken_text") is not None:
+            text = x["if_spoken_text"]
+        fl["spoken"] = fl["played"] = True
+        self.spoke_here = True
+        self.event("announcement", id=x.get("id"), text=text, live=True)
+        self._remember(f"[{NAME} was given her report to say] {text}")
+        if not text.strip():
+            return "Nothing to add right now; say you're fine and lower your hand."
+        extra = f" Details for questions (links etc., don't read URLs unless asked): {x['chat_text']}" \
+            if x.get("chat_text") else ""
+        return ("You were called on (your hand was up) for this. Say it now, naturally and completely, keeping every "
+                f"fact and number: {text}{extra} If they also asked you something else, hand that off next.")
+
+    async def control(self, request: str):
+        """Her own Meet controls, asked for by the live voice through a hand-off ("raise my hand", "unmute me"):
+        plain button clicks, no back office. Returns what to tell her, or None if the request isn't one of these."""
+        r = request.lower().strip()
+        if r in ("raise", "lower", "mute", "unmute", "leave"):      # from the desk's "CONTROL: <act>"
+            act = r
+        else:
+            acts = [("leave", r"\bleave (the |this )?(call|meeting)\b|\b(drop|hang) (off|up)\b"),("lower", r"\b(lower|put down|take down)\b.*\bhand\b|\bhand\b.*\bdown\b"),
+                    ("raise", r"\b(raise|put up)\b.*\bhand\b|\bhand\b.*\bup\b"),
+                    ("unmute", r"\bunmute\b|\b(mic|microphone)\b.*\bon\b|turn on .*\b(mic|microphone)\b"),
+                    ("mute", r"\bmute\b|\b(mic|microphone)\b.*\boff\b|turn off .*\b(mic|microphone)\b")]
+            act = next((a for a, rx in acts if re.search(rx, r)), None)
+            if not act or len(r.split()) > 14:  # a real task that merely mentions a hand/mic goes to the back office
+                return None
+        if act == "leave":     # she says goodbye (her reply to this hand-off), then the session ends
+            self.leave_requested = True
+            self.event("leave_requested", how="voice")
+
+            async def later():
+                await asyncio.sleep(6)
+                self.agent.stop.set()
+            asyncio.get_running_loop().create_task(later())
+            return "You're leaving the meeting now: say a short goodbye."
+        fn = {"raise": lambda: self.hand(True) if self.hand else None,
+              "lower": lambda: self.hand(False) if self.hand else None,
+              "mute": lambda: self.mute() if self.mute else None,
+              "unmute": lambda: self.unmute() if self.unmute else None}[act]
+        try:
+            c = fn()
+            ok = bool(await c) if c else False
+        except Exception as e:
+            self.log(f"maya: control {act} failed: {e}")
+            ok = False
+        self.event("control", act=act, ok=ok, request=request[:200])
+        done = {"raise": "Your hand is raised now.", "lower": "Your hand is lowered.",
+                "mute": "Your microphone is off now: nobody hears you until you unmute.",
+                "unmute": "Your microphone is on now."}[act]
+        return done if ok else f"That didn't work ({act}); say so briefly."
+
+    async def say_text(self, text):
+        """Live engine: say a fixed text in her voice through the one output stream (e.g. a link chat refused)."""
+        import speak
+        wav = Path(tempfile.gettempdir()) / f"nova_say_{int(time.time())}.wav"
+        await asyncio.to_thread(speak.synth_wav, text, str(wav), "gateway", os.environ.get("REALTIME_VOICE", "marin"))
+        from meet.live_meet import load_pcm
+        pcm = load_pcm(wav)
+        wav.unlink(missing_ok=True)
+        self.play_until = time.time() + len(pcm) / 96000
+        self.agent.voice.say(pcm)
+        self._remember(f"[{NAME} said] {text}")
+
     async def say_floor(self, speaker=None, cue=""):
         from meet.browser import ANNOUNCE_PROMPT
         fl = self.floor
         if not fl or fl.get("spoken"):
             return
         fl["spoken"] = True
+        if self.engine == "live":   # live: she says it herself after a hand-off (report_for_handoff), no recording
+            fl["spoken"] = False
+            return
         self.last_trigger = time.time()
         x = fl["x"]
         wav = Path(x.get("audio") or "")

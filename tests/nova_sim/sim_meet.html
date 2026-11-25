@@ -4,10 +4,10 @@
      In the call it plays the scripted lines (audio -> Chrome speaker -> maya_out -> Nova's ears), shows each as a
      caption, and measures Chrome's MIC (maya_mic = Nova's voice) to see when Nova speaks. Results are POSTed to /log. -->
 <html><head><title>Meet - sim</title><style>body{font:14px sans-serif}</style></head><body>
+<button aria-label="Turn on microphone (ctrl + d)" id="micbtn" onclick="if(/^turn on/i.test(this.getAttribute('aria-label'))){this.setAttribute('aria-label','Turn off microphone (ctrl + d)');post('mic_on')}else{this.setAttribute('aria-label','Turn on microphone (ctrl + d)');post('mic_off')}">mic</button>
 <div id="pre">
   <h2>Ready to join?</h2>
   <button aria-label="Turn off camera (ctrl + e)" onclick="this.setAttribute('aria-label','Turn on camera (ctrl + e)')">cam</button>
-  <button aria-label="Turn on microphone (ctrl + d)" onclick="this.setAttribute('aria-label','Turn off microphone (ctrl + d)')">mic</button>
   <button onclick="ask()">Join now</button>
 </div>
 <div id="lobby" hidden>Asking to be let in...  You'll join the call when someone lets you in</div>
@@ -64,7 +64,8 @@ async function startMic() {
     let e = 0; for (const x of buf) e += x * x;
     const rms = Math.sqrt(e / buf.length);
     if (rms > 0.01) { loud++; quiet = 0; } else { quiet++; loud = 0; }
-    if (!micOn && loud >= 2) { micOn = true; micStart = now(); post('nova_voice_start'); }
+    const muted = /^turn on/i.test(micbtn.getAttribute('aria-label'));   // muted in Meet: nobody hears her
+    if (!micOn && loud >= 2) { micOn = true; micStart = now(); post(muted ? 'nova_voice_muted' : 'nova_voice_start'); }
     if (micOn && quiet >= 8) { micOn = false; post('nova_voice_end', {dur: +(now() - micStart).toFixed(2)}); }
   }, 100);
 }
@@ -72,6 +73,7 @@ const sleep = s => new Promise(r => setTimeout(r, s * 1000));
 async function run() {
   for (let i = 0; i < script.lines.length && inCall; i++) {
     const L = script.lines[i];
+    if (L.mute) { micbtn.setAttribute('aria-label', 'Turn on microphone (ctrl + d)'); post('host_muted', {i}); }
     if (L.chat) { chatMsg(L.speaker, L.chat); post('chat_in', {i, speaker: L.speaker}); }
     if (L.audio) {
       const a = new Audio(L.audio);

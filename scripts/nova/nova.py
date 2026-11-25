@@ -307,6 +307,11 @@ def render_announcement(aid):
                 speak.synth_wav(x["text"], str(out), engine="gateway", voice=os.environ.get("REALTIME_VOICE", "marin"))
                 x["audio"] = str(out)
                 print(f"recorded {out.name} in Nova's voice")
+                if x.get("if_spoken_text"):
+                    out2 = out.with_name(f"{aid}_if_spoken.wav")
+                    speak.synth_wav(x["if_spoken_text"], str(out2), engine="gateway",
+                                    voice=os.environ.get("REALTIME_VOICE", "marin"))
+                    x["if_spoken_audio"] = str(out2)
             except Exception as e:
                 print(f"voice recording failed ({e}); Nova will speak it live instead")
     B.save_announcements(items)
@@ -318,7 +323,8 @@ def cmd_announce(a):
         aid = time.strftime("%Y%m%d%H%M%S")
         items.append({"id": aid, "title": a.title, "url": a.url, "text": a.text, "after_s": a.after,
                       "min_others": a.min_others, "quiet_s": 4, "chat": not a.no_chat, "added": time.time(),
-                      "wait_for": a.wait_for, "raise_hand": not a.no_hand})
+                      "wait_for": a.wait_for, "raise_hand": not a.no_hand,
+                      **({"if_spoken_text": a.if_spoken} if a.if_spoken is not None else {})})
         B.save_announcements(items)
         print(f"queued {aid}: Nova will say it in the next meeting matching title={a.title!r} url={a.url!r}")
         render_announcement(aid)
@@ -378,6 +384,8 @@ def main():
     an.add_argument("--min-others", type=int, default=2); an.add_argument("--no-chat", action="store_true")
     an.add_argument("--wait-for", help="only when this person is in the call, and they must give Nova the floor")
     an.add_argument("--no-hand", action="store_true", help="speak when quiet instead of raising the hand first")
+    an.add_argument("--if-spoken", help="say this instead if Nova already spoke in the meeting (e.g. she introduced "
+                                        "herself live); \"\" = skip it then (live engine)")
     an.set_defaults(fn=cmd_announce)
     w = sub.add_parser("work", help="Nova's work queue: list | add <task> | show <id> | cancel <id> | worker")
     w.add_argument("action", choices=["list", "add", "show", "cancel", "worker"]); w.add_argument("rest", nargs="*")

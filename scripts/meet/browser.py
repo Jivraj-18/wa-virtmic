@@ -409,6 +409,20 @@ async def unmute(page) -> bool:
     return await page.get_by_role("button", name=on).count() > 0
 
 
+async def mute(page) -> bool:
+    """Turn Nova's mic off. True if it is off now."""
+    off_now = re.compile(r"^turn on (microphone|mic)", re.I)
+    turn_off = re.compile(r"^turn off (microphone|mic)", re.I)
+    if await page.get_by_role("button", name=off_now).count():
+        return True
+    await _click(page.get_by_role("button", name=turn_off), timeout=4000)
+    await page.wait_for_timeout(700)
+    if not await page.get_by_role("button", name=off_now).count():
+        await js_click(page, turn_off.pattern)
+        await page.wait_for_timeout(1000)
+    return await page.get_by_role("button", name=off_now).count() > 0
+
+
 async def js_click(page, pattern: str) -> bool:
     """Click the first visible button whose aria-label matches `pattern` (case-insensitive) from inside the page."""
     try:
@@ -580,6 +594,41 @@ ANNOUNCE_PROMPT = ("You raised your hand and {who} just gave you the floor ({cue
                    "naturally and politely, close to this wording, in English, without adding anything else: \"{text}\"")
 
 
+def start_recording(run_dir) -> list:
+    """Record the call as it goes on, into the meeting folder: meeting.ogg (everyone else, what Nova hears) and
+    nova.ogg (what Nova says), 16 kHz mono Opus (~11 MB/h each). Both start together, so `ffmpeg -i meeting.ogg -i
+    nova.ogg -filter_complex amix=inputs=2 call.ogg` gives the whole call. NOVA_RECORD=0 turns it off."""
+    import signal, subprocess
+    if os.environ.get("NOVA_RECORD", "1") == "0":
+        return []
+    procs = []
+    for name, dev in (("meeting", f"{OUT_SINK}.monitor"), ("nova", f"{MIC_SINK}.monitor")):
+        cmd = (f"parec --device={dev} --raw --format=s16le --rate=16000 --channels=1 | ffmpeg -loglevel error -y "
+               f"-f s16le -ar 16000 -ac 1 -i - -c:a libopus -b:a 24k {run_dir / (name + '.ogg')}")
+        try:
+            procs.append(subprocess.Popen(["sh", "-c", cmd], start_new_session=True, stdin=subprocess.DEVNULL))
+        except Exception as e:
+            print(f"maya: recording {name} failed: {e}")
+    return procs
+
+
+def stop_recording(procs):
+    import signal
+    for p in procs:
+        try:
+            os.killpg(p.pid, signal.SIGINT)   # parec ends -> ffmpeg finishes the file cleanly
+        except Exception:
+            pass
+    for p in procs:
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+
 def spawn_notes(run_dir, log=print):
     """Post-meeting notes in a separate, detached process (never in the meeting loop)."""
     notes = Path(__file__).resolve().parents[1] / "nova" / "notes.py"
@@ -673,6 +722,7 @@ def _cmd_join(a):
         except Exception:
             pass
         print(f"maya: {len(history)} lines of earlier context from previous sessions of this meeting")
+        recorders = start_recording(run_dir)
         await page.wait_for_timeout(2500)
         await R.enable_captions(page)
         await R.open_chat(page)
@@ -760,7 +810,7 @@ def _cmd_join(a):
                     enough = (others or 0) >= x.get("min_others", 1) or (others is None and time.time() - t_join > 300)
                     if time.time() - t_join >= x.get("after_s", 60) and enough and present and quiet:
                         pending.pop(0)
-                        if x.get("raise_hand", True):
+                        if x.get("raise_hand", True) or m.engine == "live":   # live: always called on first
                             ok = await raise_hand(page, True)
                             m.event("hand_raised", id=x.get("id"), ok=ok, waiting_for=who or "anyone")
                             fl = {"x": x, "who": (x.get("floor_from") or who).lower(), "since": time.time(), "spoken": False}
@@ -769,7 +819,7 @@ def _cmd_join(a):
                         else:
                             state["floor"] = fl = {"x": x, "who": (x.get("floor_from") or who).lower(), "since": time.time(), "spoken": False}
                             await m.say_floor()
-                if fl and fl.get("spoken") and not fl.get("finished"):
+                if fl and fl.get("spoken") and fl.get("played", True) and not fl.get("finished"):
                     fl["finished"] = True
                     x = fl["x"]
                     await raise_hand(page, False)
@@ -779,9 +829,14 @@ def _cmd_join(a):
                         if not ok and urls and m:
                             spoken = "; ".join(speakable_url(u) for u in urls[:2])
                             m.event("links_spoken", urls=urls[:2])
-                            await m.agent.respond("The meeting chat refused your message (you joined from an outside "
-                                                  "account). Say in one short sentence that you can't post in this "
-                                                  f"meeting's chat, then read this link out slowly and clearly: {spoken}")
+                            if m.engine == "live":
+                                await m.say_text("I couldn't post that in this meeting's chat, so here is the "
+                                                 f"link: {spoken}")
+                            else:
+                                await m.agent.respond("The meeting chat refused your message (you joined from an "
+                                                      "outside account). Say in one short sentence that you can't post "
+                                                      f"in this meeting's chat, then read this link out slowly and "
+                                                      f"clearly: {spoken}")
                     mark_announced(x.get("id"), a.title or a.url)
                     state["floor"] = None     # done: the next queued announcement (if any) can start
                     if m:
@@ -791,6 +846,7 @@ def _cmd_join(a):
         reader_task = asyncio.create_task(reader())
         watch_task = None
         t_end = time.time() + a.seconds
+        fails = 0     # voice sessions in a row that failed to start
         try:
             while time.time() < t_end:
                 maya = Maya(f"{OUT_SINK}.monitor", MIC_SINK, run_dir / "transcript.txt", run_dir / "maya_events.jsonl",
@@ -798,19 +854,28 @@ def _cmd_join(a):
                 maya.meeting_url, maya.meeting_title = a.url, a.title or ""
                 maya.chat_send = lambda text: send_chat(page, text)
                 maya.unmute = lambda: unmute(page)
+                maya.mute = lambda: mute(page)
+                maya.hand = lambda up: raise_hand(page, up)
                 state["maya"] = maya
                 if watch_task is None or watch_task.done():
                     watch_task = asyncio.create_task(watch())
-                await maya.run(t_end - time.time())
+                try:
+                    await maya.run(t_end - time.time())
+                    fails = 0
+                except Exception as e:   # a voice session that fails to start must not end her meeting
+                    fails += 1
+                    print(f"maya: voice session failed ({type(e).__name__}: {str(e)[:200]}), try {fails}")
+                    maya.event("session_failed", error=f"{type(e).__name__}: {str(e)[:200]}", n=fails)
                 history = maya.history
                 if maya.leave_requested or state.get("ended") or time.time() >= t_end:
                     break
-                print("maya: realtime session ended unexpectedly - reconnecting with the meeting context")
-                await asyncio.sleep(2)
+                print("maya: voice session ended unexpectedly - reconnecting with the meeting context")
+                await asyncio.sleep(min(30, 2 * (fails or 1)))
         finally:
             reader_task.cancel()
             if watch_task:
                 watch_task.cancel()
+            stop_recording(recorders)
             try:
                 await leave_meet(page)
                 await page.wait_for_timeout(1500)

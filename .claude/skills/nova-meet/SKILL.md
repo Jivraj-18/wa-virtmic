@@ -32,8 +32,18 @@ Before joining any REAL meeting, tell the user. Name: `MAYA_NAME` (default Nova;
   Chrome's mic processing (EC/NS/AGC) is off via `mic_apm.JS` init script - both WhatsApp findings.
 - `nova join` spawns `python -m scripts.meet.maya join <url>` detached (log `~/.cache/nova/join.log`) and watches
   `~/.cache/nova/state.json` (phase: spawning -> joining -> lobby -> in_meeting -> left/failed; others, names, mic).
-- In the meeting: gpt-realtime hears everything but never answers on its own; it speaks only when addressed by name
-  (`addressing.py`; Meet captions give speaker names), 30 s follow-up window. Chat tips are OFF (`--tips N` to enable).
+- Voice engine `NOVA_ENGINE`: **live** = GPT-Live (`NOVA_LIVE_MODEL`, default gpt-live-1.1; `scripts/meet/live_meet.py`),
+  full duplex, decides ITSELF when to talk (no judge, no name trigger); its hand-offs go to the Claude "meeting desk"
+  (captions with speaker names, work queue) or, for "raise/lower my hand", "mute/unmute me", straight to Meet button
+  clicks (`Maya.control`). ONE output stream (`Voice` in live_meet.py): every 20 ms frame is the model's OR her report,
+  never both. Hand up for a report + the model starts a turn = she was called on -> she unmutes; her next hand-off
+  gets the report text back (`report_for_handoff`, no Claude) and she says it LIVE in her own words (so she can answer
+  questions on it). No recorded fallback: if she doesn't hand off, the hand stays up for the next call-on. GPT-Live over WebRTC accepts no text outside a hand-off (probed 2026-11-25: no
+  conversation.item.create; session.instructions.append needs a delegation_id). **realtime** = the old gpt-realtime
+  path: speaks only when addressed by name (`addressing.py`) + gpt-5.4-mini addressee judge, 30 s follow-up window.
+  Chat tips are OFF (`--tips N` to enable).
+- The call is recorded as it goes: `meeting.ogg` (everyone else) + `nova.ogg` (her) in the meeting folder
+  (`NOVA_RECORD=0` = off). Whole call: `ffmpeg -i meeting.ogg -i nova.ogg -filter_complex amix=inputs=2 call.ogg`.
 - Leaves on: `nova leave` (flag file `~/.cache/nova/leave.request`), meeting ended, alone 90 s after others were
   there, nobody came in 15 min, `--until` (autojoin: event end + 10 min), or "Nova, leave the meeting".
 - Afterwards `scripts/nova/notes.py make <dir> --send` runs DETACHED: waits up to 15 min for Meet's transcript /
@@ -53,6 +63,10 @@ when that person gives her the floor (her name, or a go-ahead judged by a small 
 bolo"), she plays the pre-recorded text (`announce render`; TTS in her voice, starts instantly - the live model took
 ~7 s for a 48 s text), lowers the hand, posts the text in chat (split at 450 chars) and marks it done. The queue is
 re-read every 5 s during a meeting. Rehearse in a test meeting with `--title "<test title>" --wait-for <you>`.
+`--if-spoken "<shorter text>"` (or `""` = skip) is said instead when she already spoke in the meeting (live engine;
+2026-11-25 she gave the full intro after already introducing herself live).
+Test both engines with `NOVA_ENGINE=live|realtime python tests/nova_sim/run_talk_sim.py` (multi-speaker: other AI
+agent, name in the third person, host mute, hand-raise report) and `python tests/test_nova_voice.py`.
 
 ## Lessons from the first real Meet (2026-11-24)
 - Mic: CDP permission overrides vanish when the CDP connection that set them closes (every status/probe!) -> Meet
