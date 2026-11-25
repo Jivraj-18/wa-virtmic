@@ -39,8 +39,16 @@ IN_PROOT = "proot" in os.uname().release.lower()   # Chrome's sandbox crashes un
 def ensure_display(display=DISPLAY):
     """Start a private Xvfb for Nova if her display isn't up (never touches :99, the WhatsApp display)."""
     n = display.lstrip(":")
-    if n == "99" or Path(f"{XTMP}/.X11-unix/X{n}").exists():
+    if n == "99":
         return
+    sock, lock = Path(f"{XTMP}/.X11-unix/X{n}"), Path(f"{XTMP}/.X{n}-lock")
+    if sock.exists():
+        try:  # a phone reboot leaves the socket/lock behind with no Xvfb: check the lock's pid is alive
+            os.kill(int(lock.read_text().strip()), 0)
+            return
+        except Exception:
+            sock.unlink(missing_ok=True)
+            lock.unlink(missing_ok=True)
     xvfb = shutil.which("Xvfb")
     if not xvfb:
         raise SystemExit("Xvfb not found (pkg install xorg-server-xvfb)")
@@ -386,6 +394,19 @@ async def raise_hand(page, up=True) -> bool:
     await js_click(page, other.pattern)
     await page.wait_for_timeout(1200)
     return await page.get_by_role("button", name=want).count() > 0
+
+
+async def unmute(page) -> bool:
+    """Turn Nova's mic back on (e.g. the host muted her). True if it is on now."""
+    on = re.compile(r"^turn off (microphone|mic)", re.I)
+    if await page.get_by_role("button", name=on).count():
+        return True
+    await _click(page.get_by_role("button", name=RX["mic_on"]), timeout=4000)
+    await page.wait_for_timeout(700)
+    if not await page.get_by_role("button", name=on).count():
+        await js_click(page, RX["mic_on"].pattern)
+        await page.wait_for_timeout(1000)
+    return await page.get_by_role("button", name=on).count() > 0
 
 
 async def js_click(page, pattern: str) -> bool:
@@ -742,11 +763,11 @@ def _cmd_join(a):
                         if x.get("raise_hand", True):
                             ok = await raise_hand(page, True)
                             m.event("hand_raised", id=x.get("id"), ok=ok, waiting_for=who or "anyone")
-                            fl = {"x": x, "who": who, "since": time.time(), "spoken": False}
+                            fl = {"x": x, "who": (x.get("floor_from") or who).lower(), "since": time.time(), "spoken": False}
                             state["floor"] = fl
                             m.floor = fl
                         else:
-                            state["floor"] = fl = {"x": x, "who": who, "since": time.time(), "spoken": False}
+                            state["floor"] = fl = {"x": x, "who": (x.get("floor_from") or who).lower(), "since": time.time(), "spoken": False}
                             await m.say_floor()
                 if fl and fl.get("spoken") and not fl.get("finished"):
                     fl["finished"] = True
@@ -776,6 +797,7 @@ def _cmd_join(a):
                             chat_post=post, suggest_interval=a.suggest_interval, history=history)
                 maya.meeting_url, maya.meeting_title = a.url, a.title or ""
                 maya.chat_send = lambda text: send_chat(page, text)
+                maya.unmute = lambda: unmute(page)
                 state["maya"] = maya
                 if watch_task is None or watch_task.done():
                     watch_task = asyncio.create_task(watch())

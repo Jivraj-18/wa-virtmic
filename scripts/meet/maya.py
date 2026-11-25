@@ -242,6 +242,7 @@ class Maya:
         self.history = list(history or [])   # "who said what" lines; survives reconnects (passed to the next Maya)
         self.leave_requested = False
         self.meeting_url, self.meeting_title = "", ""
+        self.unmute = None         # async fn() -> bool: mic on before a hand-raise report (host may have muted her)
         self.chat_send = None      # async fn(text) -> bool, set by browser._cmd_join   # set by browser._cmd_join (task reports go back to this meeting)
         self.floor = None          # raised hand waiting for {"who"} to give Nova the floor (set by browser.watch)
         self.floor_checking = False
@@ -469,6 +470,11 @@ class Maya:
                                         os.environ.get("REALTIME_VOICE", "marin"))
             except Exception as e:
                 self.log(f"maya: TTS for announcement failed: {e}")
+        if self.unmute:   # the host may have muted her: unmute first, or nobody hears the report
+            try:
+                self.event("unmute", ok=await self.unmute())
+            except Exception as e:
+                self.log(f"maya: unmute failed: {e}")
         self.event("announcement", id=x.get("id"), to=speaker, text=x["text"], prerecorded=wav.is_file())
         if wav.is_file():
             # pre-recorded in Nova's voice when queued: starts instantly (the model took ~7 s for a long text)
