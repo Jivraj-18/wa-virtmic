@@ -28,6 +28,9 @@ drop what is obsolete or trivial. Sections:
 ## People - name, role, how they relate to {name}, what they care about, how they like to be addressed
 ## Preferences and corrections for {name} - how people want her to behave (e.g. "keep answers short", "don't repeat
    passwords"), with who said it and the date
+## How the team talks - the team's own phrasing and conventions {name} must copy (turn-taking like "Anand, I'll
+   go first", how updates are given, sign-offs). People teach a thing ONCE: keep every entry until someone changes it,
+   and add new ones whenever the records show the team's way of saying something or someone corrects her wording
 ## Open items - promises and requests still open ({name}'s and others'), with who/when; remove finished ones
 ## Decisions and facts - things decided or stated that she may need later (dates, names, links, projects)
 ## Meetings - one line per meeting: date, title, 1-2 sentence gist (keep the last 30)
