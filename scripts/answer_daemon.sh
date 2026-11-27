@@ -83,7 +83,18 @@ alive "$AA_PIDFILE" && kill "$(cat "$AA_PIDFILE")" 2>/dev/null
 pkill -f "^$PY -u $S/auto_answer.py" 2>/dev/null
 pkill -f "^$PY -u $S/handoff.py serve" 2>/dev/null
 pkill -f "^$XVFB_BIN $WA_DISPLAY" 2>/dev/null
-pulseaudio --kill 2>/dev/null
+# PulseAudio is shared with Nova (maya_* devices): killing it mid-meeting silenced her while Meet still showed her
+# mic on (2026-11-27). Keep a working server while she is in a meeting; audio_setup.sh adds our devices to it.
+nova_in_meeting() {
+  local st="$HOME/.cache/nova/state.json" pid
+  grep -qE '"phase": "(spawning|starting|joining|lobby|in_meeting)"' "$st" 2>/dev/null || return 1
+  pid=$(grep -oE '"pid": [0-9]+' "$st" | grep -oE '[0-9]+'); [ -n "$pid" ] && [ -d "/proc/$pid" ]
+}
+if nova_in_meeting && pactl info >/dev/null 2>&1; then
+  log "Nova is in a meeting - keeping the running PulseAudio"
+else
+  pulseaudio --kill 2>/dev/null
+fi
 sleep 3
 rm -f "$AA_PIDFILE"
 # remove the pid file only if it is still ours (a newer supervisor may have taken over and rewritten it)
