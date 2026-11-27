@@ -478,6 +478,8 @@ async def meet_page(ctx):
 STATE_DIR = Path(os.environ.get("NOVA_STATE_DIR", str(Path.home() / ".cache" / "nova")))
 STATE_FILE = STATE_DIR / "state.json"
 LEAVE_FLAG = STATE_DIR / "leave.request"
+# `nova stay`: while this file exists Nova ignores the scheduled end (--until / --seconds) and stays until told to leave
+STAY_FLAG = STATE_DIR / "stay.request"
 MEETINGS = Path(os.environ.get("NOVA_MEETINGS", str(Path.home() / "nova_meetings")))
 
 
@@ -522,8 +524,12 @@ MEET_STATE_JS = r"""() => {
   const tiles = new Map();
   document.querySelectorAll('[data-participant-id]').forEach(t => {
     const id = t.getAttribute('data-participant-id');
-    const nameEl = t.querySelector('[data-self-name]') || t.querySelector('.notranslate');
-    const nm = (nameEl && (nameEl.getAttribute('data-self-name') || nameEl.innerText) || '').split('\n')[0].trim();
+    // icon fonts are text too ("keep_off", "more_vert", "mic_off"): skip those lines, take the first real name
+    const selfEl = t.querySelector('[data-self-name]');
+    const lines = (selfEl ? [selfEl.getAttribute('data-self-name')] : []).concat([...t.querySelectorAll('*')].filter(e => !e.children.length)
+      .flatMap(e => (e.innerText || '').split('\n')))
+      .map(x => (x || '').trim()).filter(x => x && !/^[a-z0-9]+(_[a-z0-9]+)*$/.test(x) && !/^(you|presentation)$/i.test(x));
+    const nm = lines[0] || '';
     if (!tiles.has(id) || (!tiles.get(id) && nm)) tiles.set(id, nm);
   });
   return {
@@ -537,6 +543,36 @@ MEET_STATE_JS = r"""() => {
     count, tiles: tiles.size, names: [...new Set([...tiles.values()].filter(Boolean))].slice(0, 30),
   };
 }"""
+
+
+# Leave with the owner: once OWNER (substring, case-insensitive) was in the meeting and is gone, Nova leaves too.
+OWNER = os.environ.get("NOVA_OWNER", "Jivraj")
+OWNER_GONE_S = float(os.environ.get("NOVA_OWNER_GONE_S", "30"))   # absent this long -> confirm with the People list
+LEAVE_WITH_OWNER = os.environ.get("NOVA_LEAVE_WITH_OWNER", "1") != "0"
+
+PEOPLE_JS = r"""async () => {
+  const vis = e => e && e.offsetParent !== null;
+  const items = () => [...document.querySelectorAll('[role=listitem][aria-label]')].map(e => e.getAttribute('aria-label').trim())
+                        .filter(Boolean);
+  let got = items();
+  if (got.length) return {names: got, opened: false};
+  const b = [...document.querySelectorAll('button,[role=button]')].filter(vis)
+            .find(e => /^(people|show everyone|participants|view everyone)/i.test(e.getAttribute('aria-label') || ''));
+  if (!b) return {names: [], opened: false, error: 'no People button'};
+  b.click();
+  for (let i = 0; i < 20 && !(got = items()).length; i++) await new Promise(r => setTimeout(r, 150));
+  b.click();   // close it again (chat uses the same side panel)
+  return {names: got, opened: true};
+}"""
+
+
+async def people_list(page) -> list | None:
+    """Everyone in the call from Meet's People panel (authoritative, unlike tiles that may be off screen); None = unreadable."""
+    try:
+        r = await page.evaluate(PEOPLE_JS)
+        return r.get("names") or None
+    except Exception:
+        return None
 
 
 async def meet_state(page) -> dict:
@@ -796,6 +832,8 @@ def _cmd_join(a):
         async def watch():
             """Every 5 s: still in the call? leave requested? alone? past the scheduled end?"""
             seen_others, alone_since, t_join = False, None, time.time()
+            own = {"seen": False, "last": 0.0, "count": None, "checked": 0.0}   # the owner's presence (leave with them)
+            owner = OWNER.lower()
             pending = due_announcements(a.title or "", a.url)
             if pending:
                 print(f"nova: {len(pending)} announcement(s) queued for this meeting")
@@ -816,8 +854,30 @@ def _cmd_join(a):
                     limit = a.alone_leave if seen_others else a.nobody_leave
                     if alone_since and time.time() - alone_since > limit:
                         return stop("everyone_left" if seen_others else "nobody_came")
-                if a.until and time.time() > a.until:
+                # once the owner was seen, THEY decide: Nova stays past the scheduled end until they leave
+                if a.until and time.time() > a.until and not STAY_FLAG.exists() \
+                        and not (LEAVE_WITH_OWNER and own["seen"]):
                     return stop("scheduled_end")
+                if LEAVE_WITH_OWNER and owner:
+                    m0, now = state["maya"], time.time()
+                    here = any(owner in n.lower() for n in st.get("names", [])) or (m0 is not None and any(
+                        owner in sp.lower() and now - t < 60 for t, sp in getattr(m0, "recent_speakers", [])
+                        if isinstance(t, (int, float))))
+                    if here:
+                        own.update(seen=True, last=now, count=others)
+                    elif own["seen"] and now - own["last"] > OWNER_GONE_S and now - own["checked"] > 20:
+                        own["checked"] = now
+                        ppl = await people_list(page)
+                        if ppl is not None:
+                            if any(owner in n.lower() for n in ppl):
+                                own.update(last=now, count=others)
+                            else:
+                                print(f"nova: {OWNER} has left (People: {', '.join(ppl)[:200]}) - leaving too")
+                                return stop("owner_left")
+                        elif now - own["last"] > 120 and others is not None and own["count"] is not None \
+                                and others < own["count"]:
+                            print(f"nova: {OWNER} gone 2 min and fewer people now - leaving too")
+                            return stop("owner_left")
                 m = state["maya"]
                 fl = state.get("floor")
                 if fl and m and m.floor is None and not fl.get("spoken"):
@@ -869,9 +929,13 @@ def _cmd_join(a):
         reader_task = asyncio.create_task(reader())
         watch_task = None
         t_end = time.time() + a.seconds
+        if a.until:   # the voice loop must not end before the scheduled leave (it capped meetings at 1 h)
+            t_end = max(t_end, a.until + 60)
         fails = 0     # voice sessions in a row that failed to start
         try:
-            while time.time() < t_end:
+            while time.time() < t_end or STAY_FLAG.exists():
+                if STAY_FLAG.exists():
+                    t_end = max(t_end, time.time() + 6 * 3600)
                 maya = Maya(f"{OUT_SINK}.monitor", MIC_SINK, run_dir / "transcript.txt", run_dir / "maya_events.jsonl",
                             chat_post=post, suggest_interval=a.suggest_interval, history=history)
                 maya.meeting_url, maya.meeting_title = a.url, a.title or ""
@@ -910,6 +974,7 @@ def _cmd_join(a):
             why = state.get("ended") or ("asked_by_voice" if state["maya"] and state["maya"].leave_requested else "timeout")
             phase("left", left_at=time.time(), left_why=why)
             LEAVE_FLAG.unlink(missing_ok=True)
+            STAY_FLAG.unlink(missing_ok=True)   # `nova stay` is for this meeting only
             # Meeting notes / action items come from Meet itself ("Notes by Gemini" on the Calendar event); Nova's own
             # notes only with NOVA_NOTES=1 (scripts/nova/notes.py can also be run by hand).
             if os.environ.get("NOVA_NOTES") == "1" and (run_dir / "who_said_what.txt").stat().st_size:

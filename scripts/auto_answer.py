@@ -27,7 +27,13 @@ import diskguard  # noqa: E402
 
 CALLS = HERE / "calls"
 
-GREETING = "Hello! You've reached an AI assistant. How can I help you?"
+OWNER = os.environ.get("OWNER_NAME", "Jivraj")
+AI_NAME = os.environ.get("AI_NAME", "Nova")
+# Callers must know they're talking to an AI and that they can ask for the real person (handoff.py) at any time.
+GREETING = (f"Hi! This is {AI_NAME}, {OWNER}'s AI assistant. If you'd like to talk to {OWNER} instead, "
+            "just say so at any time. How can I help?")
+PERSONA = (f"\nYOUR NAME is {AI_NAME}. You are {OWNER}'s AI assistant answering {OWNER}'s WhatsApp calls; you are an AI, "
+           f"not {OWNER}. If asked who you are, say so.")
 GREETING_SAID = GREETING  # what greeting.wav says (set from --greeting in main)
 ORIGIN = "https://web.whatsapp.com"
 
@@ -239,11 +245,11 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
     ho = handoff.Client()
     ho_on = mode == "realtime" and ho.available()
     on_line = watcher.feed
-    ho_text = ""
+    ho_text = PERSONA + handoff.INSTRUCTIONS_OFF
     if ho_on:
         ho.call_started(caller, num)
         esc = handoff.EscalationWatcher(ho.ring, log=log)
-        ho_text = handoff.INSTRUCTIONS
+        ho_text = PERSONA + handoff.INSTRUCTIONS
 
         def on_line(who, text):
             watcher.feed(who, text)
@@ -273,18 +279,17 @@ def handle_call(page, greeting: str, max_secs: int, mode: str = "realtime", cont
                 "instructions": build_instructions(ctx, caller) + hang + ho_text + e2["instructions_suffix"]},
                 transcript=d / "transcript_live.txt", log=log)
         else:
-            kw = {} if speak_first else {"greeting": None}
+            kw = ({"greeting": f'Start the call by saying exactly this, in a warm voice: "{GREETING_SAID}"'}
+                  if speak_first else {"greeting": None})
             engine = engine or os.environ.get("VOICE_ENGINE", "realtime")
             AgentCls = Agent
             if engine == "live":  # full-duplex GPT-Live over WebRTC (live_agent.py)
                 from live_agent import LiveAgent as AgentCls
                 if speak_first:
-                    # GPT-Live decides itself when to talk and has waited up to ~20 s before greeting (plus a slow
-                    # session start) - callers hung up in the silence. So the recorded greeting plays the moment
-                    # Chrome's mic is up, and the model is told it has already been said.
-                    kw["greeting"] = (f'You have ALREADY greeted the caller with this recorded line: "{GREETING_SAID}". '
-                                      "Don't greet again; wait for their reply and continue from there.")
-                    instant_greeting = True
+                    # No recorded greeting: GPT-Live says it itself, so the caller can interrupt it (full duplex) -
+                    # a WAV played over the call can't be cut off. Cost: ~3 s session start before the first word.
+                    kw["greeting"] = (f'IMMEDIATELY, without waiting for the caller to speak, say this opening line '
+                                      f'warmly: "{GREETING_SAID}" If the caller talks over you, stop and listen.')
             log(f"voice engine: {engine}")
             agent = AgentCls(transcript=d / "transcript_live.txt", log=log, on_line=on_line,
                           instructions=INSTRUCTIONS + hang + ho_text + extra_instructions + card_text, **kw)

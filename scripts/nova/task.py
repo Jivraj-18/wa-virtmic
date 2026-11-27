@@ -28,17 +28,27 @@ CONF = Path.home() / ".config" / "nova" / "tasks.json"
 TOKEN = Path.home() / ".config" / "nova" / "github_token"
 PROJECTS = Path.home() / ".config" / "nova" / "projects.json"   # what Nova built (repo, url, task) - her memory
 MODEL = os.environ.get("NOVA_TASK_MODEL", "sonnet")
-TIMEOUT = float(os.environ.get("NOVA_TASK_TIMEOUT", "1200"))
+TIMEOUT = float(os.environ.get("NOVA_TASK_TIMEOUT", "2400"))   # self-updates (code + tests) take longer
 NAME = os.environ.get("MAYA_NAME", "Nova")
+REPO = HERE.parent.parent                       # Nova's own code (the live checkout)
+SELFUPDATE = f"python {HERE / 'selfupdate.py'}"
+SKILL = REPO / ".claude" / "skills" / "nova-self-update" / "SKILL.md"
 
 ROLE = """You are {name}, an AI teammate (a developer) of a small team. In a live video meeting, {requester} asked you
 to do a task. You work on it in the background in the current folder (your workspace) while the meeting goes on.
 
 Tools: Bash with git, gh (GitHub CLI, authenticated as GitHub user {gh_user}), curl, ls/mkdir/cat/cp/mv; file
 Read/Write/Edit; WebSearch/WebFetch.
-- Decide like a good developer: NEW work -> create a new repository under {gh_user} (public unless asked otherwise).
-  A CHANGE or FEEDBACK on something that exists (one of your projects below, or a repo the task names) -> clone that
-  repo and edit it; don't create a duplicate. Never delete repositories or files you didn't create, never force-push.
+- FIRST decide where the work goes (use your memory: projects, recent tasks and self-updates below):
+  * about YOU, {name} - how you talk, listen, join/leave, interrupt, raise your hand, take notes, remember, your desk,
+    tools, calendar, WhatsApp calls, or a new ability for you ("add vision", "change your own code") -> SELF-UPDATE:
+    Read {skill} and follow it exactly. Your task id is {tid}. Commands: `{selfupdate} start {tid}`,
+    `{selfupdate} check <worktree>`, `{selfupdate} ship <worktree> "<summary>"`. Edit only inside that worktree.
+  * a CHANGE or FEEDBACK on something that exists (one of your projects below, or a repo the task names) -> clone that
+    repo and edit it; don't create a duplicate.
+  * NEW work for people -> create a new repository under {gh_user} (public unless asked otherwise).
+  Unsure between them in a way that matters -> ask (question). Never delete repositories or files you didn't create,
+  never force-push.
 - GitHub Pages: push the site to the default branch, then enable Pages if not yet enabled:
   `gh api -X POST repos/{gh_user}/<repo>/pages -f "source[branch]=main" -f "source[path]=/"`; URL:
   `gh api repos/{gh_user}/<repo>/pages --jq .html_url` (going live can take a minute; report the URL anyway).
@@ -48,6 +58,9 @@ Read/Write/Edit; WebSearch/WebFetch.
 - Don't ask about details you can reasonably decide (wording, colors, layout, names): decide and mention it.
   Ask ONLY if the request is genuinely ambiguous in a way that would waste the work (e.g. which of two projects to
   change, or a missing essential fact) - then do NOT do the work; return a question instead.
+
+Your latest changes to yourself (self-updates):
+{selfupdates}
 
 Your earlier projects (you may change these when asked):
 {projects}
@@ -194,9 +207,12 @@ def do_task(item):
     cmd = [exe, "-p", "--output-format", "json", "--model", MODEL, "--permission-mode", "acceptEdits",
            "--append-system-prompt", ROLE.format(name=NAME, requester=item["requester"] or "a teammate", gh_user=user,
                                                  projects=projects_text() + "\nRecent tasks:\n" + past_text(),
-                                                 context=(item.get("context") or "(none)")[-4000:]),
+                                                 context=(item.get("context") or "(none)")[-4000:],
+                                                 tid=tid, skill=SKILL, selfupdate=SELFUPDATE,
+                                                 selfupdates=selfupdates_text()),
            "--allowedTools", "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,"
-                             "Bash(git:*),Bash(gh:*),Bash(curl:*),Bash(ls:*),Bash(mkdir:*),Bash(cat:*),Bash(cp:*),Bash(mv:*)",
+                             "Bash(git:*),Bash(gh:*),Bash(curl:*),Bash(ls:*),Bash(mkdir:*),Bash(cat:*),Bash(cp:*),Bash(mv:*),"
+                             f"Bash({SELFUPDATE}:*)",
            "--disallowedTools", "Task,Agent,NotebookEdit"]
     t0 = time.time()
     try:
@@ -222,6 +238,15 @@ def do_task(item):
     log(d, f"{state} in {time.time() - t0:.0f}s: {res}")
     if item.get("meeting_url"):
         queue_report(meta, res, d)
+
+
+def selfupdates_text() -> str:
+    try:
+        sys.path.insert(0, str(HERE))
+        import selfupdate
+        return selfupdate.recent_text()
+    except Exception:
+        return "(none yet)"
 
 
 def projects_text() -> str:

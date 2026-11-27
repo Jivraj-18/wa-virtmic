@@ -44,10 +44,9 @@
     <div class="buttons" id="buttons"></div>
     <p class="err" id="err"></p>
   </div>
-  <audio id="remote" autoplay playsinline></audio>
 <script>
 const $ = id => document.getElementById(id);
-let st = {}, pc = null, mic = null, muted = false, joinedAt = 0, myCall = false;
+let st = {}, ws = null, mic = null, ctx = null, muted = false, joinedAt = 0, myCall = false;
 
 const post = (path, body = {}) => fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'},
   body: JSON.stringify(body)}).then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; });
@@ -58,19 +57,55 @@ function btn(cls, icon, label, onclick) {
   return b;
 }
 
+// Audio runs at 16 kHz mono s16, 20 ms chunks, over ws://localhost:8788 (handoff.py Bridge).
+const WORKLETS = `
+class Cap extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(320); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) for (let i = 0; i < ch.length; i++) {
+      const v = Math.max(-1, Math.min(1, ch[i])); this.buf[this.n++] = v < 0 ? v * 32768 : v * 32767;
+      if (this.n === 320) { this.port.postMessage(this.buf.buffer, [this.buf.buffer]); this.buf = new Int16Array(320); this.n = 0; }
+    }
+    return true;
+  }
+}
+class Play extends AudioWorkletProcessor {
+  constructor() { super(); this.q = []; this.off = 0; this.len = 0; this.primed = false;
+    this.port.onmessage = e => { const a = new Int16Array(e.data); this.q.push(a); this.len += a.length;
+      while (this.len > 4800) { this.len -= this.q[0].length - this.off; this.q.shift(); this.off = 0; } }; }  // >300 ms: drop old
+  process(_, outputs) {
+    const out = outputs[0][0];
+    if (!this.primed) { if (this.len < 960) return true; this.primed = true; }                     // 60 ms jitter buffer
+    for (let i = 0; i < out.length; i++) {
+      if (!this.q.length) { this.primed = false; break; }
+      out[i] = this.q[0][this.off++] / 32768; this.len--;
+      if (this.off >= this.q[0].length) { this.q.shift(); this.off = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('cap', Cap); registerProcessor('play', Play);`;
+
 async function takeOver() {
   $('err').textContent = '';
   try {
-    mic = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
-    pc = new RTCPeerConnection();
-    mic.getTracks().forEach(t => pc.addTrack(t, mic));
-    pc.ontrack = e => { $('remote').srcObject = e.streams[0] || new MediaStream([e.track]); $('remote').play().catch(() => {}); };
-    pc.onconnectionstatechange = () => { if (pc && pc.connectionState === 'failed') $('err').textContent = 'Audio link failed. Tap Rejoin.'; render(); };
-    await pc.setLocalDescription(await pc.createOffer());
-    await new Promise(res => { if (pc.iceGatheringState === 'complete') return res();
-      pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && res(); setTimeout(res, 3000); });
-    const ans = await post('/accept', {sdp: pc.localDescription.sdp, type: pc.localDescription.type});
-    await pc.setRemoteDescription(ans);
+    ctx = new AudioContext({sampleRate: 16000});          // created inside the tap: allowed to play sound
+    const micP = navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLETS], {type: 'text/javascript'})));
+    mic = await micP;
+    const r = await post('/accept');
+    ws = new WebSocket(r.ws || `ws://${location.hostname}:${+location.port + 1}/`);
+    ws.binaryType = 'arraybuffer';
+    const cap = new AudioWorkletNode(ctx, 'cap'), play = new AudioWorkletNode(ctx, 'play', {outputChannelCount: [1]});
+    const sink = ctx.createGain(); sink.gain.value = 0;
+    ctx.createMediaStreamSource(mic).connect(cap); cap.connect(sink).connect(ctx.destination);
+    play.connect(ctx.destination);
+    cap.port.onmessage = e => { if (ws && ws.readyState === 1 && !muted && ws.bufferedAmount < 16000) ws.send(e.data); };
+    ws.onmessage = e => play.port.postMessage(e.data, [e.data]);
+    await new Promise((ok, bad) => { ws.onopen = ok; ws.onerror = () => bad(new Error('audio link refused')); });
+    ws.onclose = () => { if (myCall) { $('err').textContent = 'Audio link dropped. Tap Rejoin.'; drop(); poll(); } };
+    await ctx.resume();
     joinedAt = Date.now(); myCall = true; muted = false;
   } catch (e) {
     $('err').textContent = e.name === 'NotAllowedError' ? 'Chrome needs microphone permission for this page.' : 'Could not join: ' + e.message;
@@ -80,12 +115,13 @@ async function takeOver() {
 }
 
 function drop() {
-  if (pc) { pc.close(); pc = null; }
-  if (mic) { mic.getTracks().forEach(t => t.stop()); mic = null; }
   myCall = false;
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  if (mic) { mic.getTracks().forEach(t => t.stop()); mic = null; }
+  if (ctx) { ctx.close(); ctx = null; }
 }
 
-function toggleMute() { muted = !muted; mic && mic.getTracks().forEach(t => t.enabled = !muted); render(); }
+function toggleMute() { muted = !muted; render(); }
 
 function render() {
   const s = st.state || 'offline', who = st.caller || 'Unknown caller';
@@ -98,7 +134,7 @@ function render() {
   if (s === 'ringing') {
     T('Needs a person', who, 'The AI is keeping them on hold');
     B.append(btn('stop', '✕', 'Decline', () => post('/decline').then(poll)), btn('go', '✆', 'Answer', takeOver));
-  } else if (s === 'connected' && myCall && pc) {
+  } else if (s === 'connected' && myCall && ws) {
     T('You are on the call', who, muted ? 'You are muted' : 'The AI is off. They can hear you.');
     const sec = Math.floor((Date.now() - joinedAt) / 1000);
     $('timer').textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;

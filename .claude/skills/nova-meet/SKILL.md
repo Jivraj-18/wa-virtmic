@@ -46,6 +46,11 @@ Before joining any REAL meeting, tell the user. Name: `MAYA_NAME` (default Nova;
   (`NOVA_RECORD=0` = off). Whole call: `ffmpeg -i meeting.ogg -i nova.ogg -filter_complex amix=inputs=2 call.ogg`.
 - Leaves on: `nova leave` (flag file `~/.cache/nova/leave.request`), meeting ended, alone 90 s after others were
   there, nobody came in 15 min, `--until` (autojoin: event end + 10 min), or "Nova, leave the meeting".
+  Also when the OWNER leaves: once `NOVA_OWNER` (default "Jivraj", substring of the Meet name) was seen (tile name or
+  caption speaker) and is gone 30 s, the People panel is read to confirm -> `owner_left` (no People list: gone 2 min
+  AND fewer people). `NOVA_LEAVE_WITH_OWNER=0` = off. `nova.py stay` = ignore `--until` until `leave` (this meeting
+  only; cleared when she leaves). A running session's deadline can be moved without leaving: Python 3.14
+  `sys.remote_exec(pid, script)` setting `t_end`/`a.until` in the `go` coroutine and `end` in the live `run` (2026-11-26).
 - Afterwards `scripts/nova/notes.py make <dir> --send` runs DETACHED: waits up to 15 min for Meet's transcript /
   Gemini notes docs on the Calendar event (gws), merges them with Nova's caption log, writes `notes.md` (English;
   summary, decisions, action-item table, open questions) and emails it if `~/.config/nova/notes.json` has

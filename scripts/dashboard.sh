@@ -57,6 +57,7 @@ case "${1:-start}" in
     done ;;
   start)
     if alive "$RUN/supervisor.pid"; then echo "already running"; else
+      rm -f "$LINK"          # a link left by a killed run (phone reboot) is dead: wait for the new one
       setsid nohup bash "$0" run >/dev/null 2>&1 </dev/null &
       for _ in $(seq 45); do [ -s "$LINK" ] && break; sleep 1; done
     fi
@@ -65,7 +66,7 @@ case "${1:-start}" in
   link) cat "$LINK" 2>/dev/null || { echo "not running" >&2; exit 1; } ;;
   status)
     for n in supervisor server tunnel; do alive "$RUN/$n.pid" && echo "$n: running (pid $(cat "$RUN/$n.pid"))" || echo "$n: NOT running"; done
-    [ -s "$LINK" ] && echo "link: $(cat "$LINK")" ;;
+    [ -s "$LINK" ] && echo "link: $(cat "$LINK")"; true ;;
   stop)
     alive "$RUN/supervisor.pid" && kill "$(cat "$RUN/supervisor.pid")"
     sleep 1

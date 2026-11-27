@@ -5,11 +5,11 @@ own mic and speaker.
 Why a browser page: Termux has no RECORD_AUDIO permission (PulseAudio's module-sles-source fails to load) and the
 Termux:API app isn't installed. Android Chrome DOES have the mic, and with getUserMedia it uses the phone's
 hardware echo canceller, so speakerphone doesn't echo back to the caller. The page (http://localhost:8787, local
-only) talks WebRTC to this server (aiortc, like live_agent.py) and the server bridges it into the call's PulseAudio
+only) streams PCM over a WebSocket (:8788) to this server, which bridges it into the call's PulseAudio
 devices:
 
-  WhatsApp caller -> callout_sink.monitor -> [this server] -> WebRTC -> Chrome page -> phone speaker/earpiece
-  phone mic -> Chrome page (AEC) -> WebRTC -> [this server] -> virtmic_sink -> virtmic -> WhatsApp -> caller
+  WhatsApp caller -> callout_sink.monitor -> [this server] -> WebSocket -> Chrome page -> phone speaker/earpiece
+  phone mic -> Chrome page (AEC) -> WebSocket -> [this server] -> virtmic_sink -> virtmic -> WhatsApp -> caller
 
 Ringing: a ringtone + a spoken announcement ("<caller> needs a person: <reason>") on the phone speaker
 (OpenSL_ES_sink, works without any extra app), and the page is brought to the front with `am start`.
@@ -17,7 +17,7 @@ Ringing: a ringtone + a spoken announcement ("<caller> needs a person: <reason>"
 Flow (auto_answer.py drives it through Client):
   call starts  -> POST /call      state "live"      (page shows "Take over" for a manual takeover any time)
   AI says "...connect you to a person..." (EscalationWatcher) -> POST /ring -> state "ringing" for RING_SECS
-  human taps Answer -> POST /accept (SDP offer) -> state "connected"; auto_answer.py stops the AI at once
+  human taps Answer -> POST /accept + WebSocket audio -> state "connected"; auto_answer.py stops the AI at once
   human taps Decline / nobody answers -> state "declined" / "missed"; auto_answer.py tells the caller
   human taps Hang up -> state "hangup"; auto_answer.py ends the WhatsApp call
   call ends    -> POST /end       state "idle", bridge closed
@@ -27,7 +27,7 @@ Flow (auto_answer.py drives it through Client):
   python3 scripts/handoff.py status
 Env: HANDOFF_PORT (8787), HANDOFF_RING_SECS (45), HANDOFF_SPEAKER (OpenSL_ES_sink), HANDOFF=0 disables it in calls.
 """
-import asyncio, fractions, json, os, re, subprocess, sys, threading, time, urllib.request, wave
+import asyncio, json, os, re, subprocess, sys, threading, time, urllib.request, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -39,7 +39,6 @@ RING_SECS = float(os.environ.get("HANDOFF_RING_SECS", "45"))
 SPEAKER = os.environ.get("HANDOFF_SPEAKER", "OpenSL_ES_sink")
 CALL_IN = os.environ.get("HANDOFF_CALL_IN", "callout_sink.monitor")   # what the caller says
 CALL_OUT = os.environ.get("HANDOFF_CALL_OUT", "virtmic_sink")          # what WhatsApp sends to the caller
-RATE, FRAME = 48000, 960                                      # 20 ms, Opus native rate
 RUN = Path(os.environ.get("XDG_RUNTIME_DIR") or Path.home() / ".cache") / "wa-virtmic"
 
 
@@ -48,18 +47,35 @@ def log(*a):
 
 
 # ---------------------------------------------------------------------------------------------- transcript trigger
+OWNER = os.environ.get("OWNER_NAME", "Jivraj")   # the person who takes over (named in the greeting too)
 # The AI is told to say this exact kind of line when the caller needs a person (handoff instructions below); the
 # SCRIPT then rings - same idea as hangup.py: don't trust the model to call a tool.
+# The caller may ask in ANY words/language - GPT-Live understands that and answers with the fixed line in INSTRUCTIONS;
+# we only have to recognise the AI's own line (plus close paraphrases, Hinglish and Devanagari) here.
+_WHO = (r"(person|human|someone|somebody|team ?member|owner|boss|manager|representative|agent|"
+        + re.escape(OWNER) + r"|जीवराज|जिवराज)")
 AI_ESCALATE = re.compile(
     r"\b(connect|connecting|transfer|transferring|put|putting|pass|passing|get|getting)\b.{0,25}"
-    r"\b(you\b.{0,15})?(to|with|through to)\b.{0,12}\b(a |an |the |my |real )?"
-    r"(person|human|someone|somebody|team ?member|owner|boss|manager|representative|agent)\b", re.I)
+    r"\b(you\b.{0,15})?(to|with|through to)\b.{0,12}\b(a |an |the |my |real )?" + _WHO + r"\b"
+    r"|\b(ringing|calling|get|getting|bringing)\s+" + re.escape(OWNER) + r"\b(?!'s)"
+    r"|\b" + re.escape(OWNER) + r"\b.{0,25}\b(se|ko)\b.{0,20}\b(connect|bula|jod|transfer)"
+    r"|(जीवराज|जिवराज).{0,30}(कनेक्ट|जोड़|बुला|ट्रांसफर)", re.I)
 
-INSTRUCTIONS = """
-HANDING OVER TO A PERSON: a real person can join this call. If the caller asks for a human / real person / the owner,
-or is upset, or needs something you can't do (a decision, money, a promise, anything you're unsure about), say:
-"Let me connect you to a person, please hold on." Then keep the caller company briefly while their phone rings.
-If a person joins, you will be cut off - that's expected. Don't offer a person for things you can handle yourself."""
+INSTRUCTIONS = f"""
+HANDING OVER TO {OWNER.upper()}: {OWNER} (a real person) can join this call - your greeting tells the caller they can
+ask for {OWNER} at any time. Treat ANY way of asking as a request to escalate, in any language or wording, e.g.
+"I want to talk to {OWNER}", "is {OWNER} there?", "put me through", "can I speak to a real person / human?",
+"{OWNER} se baat karao", "{OWNER} ko bulao", or just "yes" / "haan" right after you offered {OWNER}. Also escalate if
+the caller is upset or needs something you can't do (a decision, money, a promise, anything you're unsure about).
+Don't ask "are you sure?" and don't try to handle it yourself first. Escalate at once by saying, in English, exactly:
+"Sure, connecting you to {OWNER} now, please hold on." (that sentence is what rings {OWNER}'s phone - say it even if
+you are speaking Hindi, then you may continue in Hindi). Then keep the caller company briefly while it rings.
+If {OWNER} joins, you will be cut off - that's expected. Never say that sentence unless you really are connecting."""
+
+# When the handoff server is down the greeting still offers {OWNER}: don't pretend to connect, take a message.
+INSTRUCTIONS_OFF = f"""
+If the caller asks for {OWNER} or a human (in any words): {OWNER} can't join this call right now - apologise, take
+their message (name, what it's about, how to reach them) and say {OWNER} will get back to them."""
 
 
 class EscalationWatcher:
@@ -74,7 +90,7 @@ class EscalationWatcher:
     def feed(self, who: str, text: str):
         if who == "CALLER":
             self.caller_lines = (self.caller_lines + [text])[-3:]
-        elif who == "AI" and not self.fired and AI_ESCALATE.search(text):
+        elif who == "AI" and not self.fired and self.caller_lines and AI_ESCALATE.search(text):
             self.fired = True
             reason = " ".join(self.caller_lines)[-240:] or "the caller asked for a person"
             self.log(f"handoff: AI is escalating ({text[:80]!r}) - ringing the phone")
@@ -155,6 +171,38 @@ class Ringer:
                 w.writeframes((x * 32767).astype("<i2").tobytes())
         return p
 
+    @staticmethod
+    def has_api() -> bool:
+        """Termux:API app installed? Without it every termux-* command hangs, so check the package first."""
+        try:
+            out = subprocess.run(["cmd", "package", "list", "packages", "com.termux.api"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            return "package:com.termux.api" in out
+        except Exception:
+            return False
+
+    def notify(self, who: str, reason: str):
+        """Tappable high-priority notification (needs Termux:API): tap it or 'Answer' -> the takeover page."""
+        if not self.has_api():
+            log("no Termux:API app - no notification (install it for a tappable 'Answer' notification)")
+            return
+        opener = f"termux-open-url {URL}?ring"
+        cmd = ["termux-notification", "--id", "wa-handoff", "--priority", "max", "--ongoing", "--vibrate", "500,300,500",
+               "--title", f"\U0001F4DE {who} needs you", "--content", (reason or "Tap to take over the call")[:200],
+               "--action", opener, "--button1", "Answer", "--button1-action", opener]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            log(f"notification posted{'' if r.returncode == 0 else f' (rc {r.returncode}: {r.stderr.strip()[:200]})'}")
+        except Exception as e:
+            log(f"notification failed: {type(e).__name__}: {e}")
+        self.notified = True
+
+    def unnotify(self):
+        if getattr(self, "notified", False):
+            self.notified = False
+            threading.Thread(target=lambda: subprocess.run(["termux-notification-remove", "wa-handoff"],
+                                                           capture_output=True, timeout=15), daemon=True).start()
+
     def start(self, announcement: str):
         self.stop_ev.clear()
         self.th = threading.Thread(target=self._run, args=(announcement,), daemon=True)
@@ -187,87 +235,84 @@ class Ringer:
 
     def stop(self):
         self.stop_ev.set()
+        self.unnotify()
         if self.proc and self.proc.poll() is None:
             self.proc.kill()
 
 
 class Bridge:
-    """One WebRTC connection to the takeover page, bridged into the call's PulseAudio devices."""
+    """The takeover page's audio, as raw 16 kHz mono s16 PCM over a localhost WebSocket (port PORT+1).
+
+    Was WebRTC (aiortc): on the phone ICE never connected - Android Chrome hides its host addresses behind mDNS
+    names (*.local) that aiortc can't use, and the link went "failed" after 30 s. The page already reaches localhost
+    over HTTP, so a WebSocket needs no ICE at all. Chrome's getUserMedia still applies the phone's echo canceller."""
+
+    RATE, CHUNK = 16000, 640          # 20 ms of s16 mono
+    MAX_BACKLOG = 16000               # 0.5 s queued for the caller -> drop, stay live
 
     def __init__(self, loop):
-        self.loop, self.pc, self.procs, self.tasks = loop, None, [], []
+        self.loop, self.ws, self.procs = loop, None, []
+        asyncio.run_coroutine_threadsafe(self._serve(), loop).result(10)
 
-    async def answer(self, sdp: str, typ: str) -> dict:
-        import av
-        from aiortc import MediaStreamTrack, RTCConfiguration, RTCPeerConnection, RTCSessionDescription
-        await self.close()
+    async def _serve(self):
+        import websockets
+        self.server = await websockets.serve(self._client, "127.0.0.1", PORT + 1, max_size=2 ** 16,
+                                             compression=None, ping_interval=5, ping_timeout=10)
+
+    async def _client(self, ws):
+        if not self.allowed():
+            await ws.close(4001, "no call taken over")
+            return
+        await self.close()            # one human at a time: a rejoin replaces the old link
+        self.ws = ws
         parec = await asyncio.create_subprocess_exec(
-            "parec", f"--device={CALL_IN}", "--raw", "--format=s16le", f"--rate={RATE}", "--channels=1",
+            "parec", f"--device={CALL_IN}", "--raw", "--format=s16le", f"--rate={self.RATE}", "--channels=1",
             "--latency-msec=20", stdout=asyncio.subprocess.PIPE)
         pacat = await asyncio.create_subprocess_exec(
-            "pacat", "--playback", f"--device={CALL_OUT}", "--raw", "--format=s16le", f"--rate={RATE}",
-            "--channels=1", "--latency-msec=100", stdin=asyncio.subprocess.PIPE)
+            "pacat", "--playback", f"--device={CALL_OUT}", "--raw", "--format=s16le", f"--rate={self.RATE}",
+            "--channels=1", "--latency-msec=60", stdin=asyncio.subprocess.PIPE)
         self.procs = [parec, pacat]
+        log("page audio connected: caller <-> human")
 
-        class CallerTrack(MediaStreamTrack):
-            kind = "audio"
-
-            def __init__(self):
-                super().__init__()
-                self.pts = 0
-
-            async def recv(self):
-                data = await parec.stdout.readexactly(FRAME * 2)   # parec paces this in real time
-                fr = av.AudioFrame(format="s16", layout="mono", samples=FRAME)
-                fr.planes[0].update(data)
-                fr.sample_rate, fr.pts, fr.time_base = RATE, self.pts, fractions.Fraction(1, RATE)
-                self.pts += FRAME
-                return fr
-
-        pc = self.pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))   # same phone: no STUN needed
-        pc.addTrack(CallerTrack())
-
-        async def play(track):
-            rs = av.AudioResampler(format="s16", layout="mono", rate=RATE)
+        async def to_page():          # what the caller says -> the human's speaker
             while True:
-                try:
-                    fr = await track.recv()
-                except Exception:
-                    return
-                q = getattr(track, "_queue", None)
-                if q is not None and q.qsize() > 10:   # fell behind (busy phone): drop backlog, keep it live
-                    continue
-                for out in rs.resample(fr):
-                    try:
-                        pacat.stdin.write(bytes(out.planes[0])[: out.samples * 2])
-                        await pacat.stdin.drain()
-                    except (BrokenPipeError, ConnectionResetError):
-                        return
+                data = await parec.stdout.readexactly(self.CHUNK)
+                await ws.send(data)
 
-        @pc.on("track")
-        def on_track(track):
-            if track.kind == "audio":
-                log("human's mic is live -> caller")
-                self.tasks.append(asyncio.ensure_future(play(track)))
+        async def from_page():        # the human's mic -> the caller
+            n = 0
+            async for msg in ws:
+                if isinstance(msg, bytes) and msg:
+                    if pacat.stdin.transport.get_write_buffer_size() > self.MAX_BACKLOG:
+                        continue
+                    pacat.stdin.write(msg)
+                    n += 1
+                    if n == 1:
+                        log("human's mic is live -> caller")
+        tasks = [asyncio.ensure_future(to_page()), asyncio.ensure_future(from_page())]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except Exception:
+            pass
+        finally:
+            for t in tasks:
+                t.cancel()
+            for pr in (parec, pacat):
+                if pr.returncode is None:
+                    pr.kill()
+            if self.ws is ws:
+                self.ws = None
+            log("page audio disconnected")
 
-        @pc.on("connectionstatechange")
-        async def on_state():
-            log(f"page connection: {pc.connectionState}")
-
-        await pc.setRemoteDescription(RTCSessionDescription(sdp, typ))
-        await pc.setLocalDescription(await pc.createAnswer())
-        return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    allowed = staticmethod(lambda: False)   # set by Desk: only while state == connected
 
     async def close(self):
-        for t in self.tasks:
-            t.cancel()
-        self.tasks = []
-        if self.pc:
-            await self.pc.close()
-            self.pc = None
-        for p in self.procs:
-            if p.returncode is None:
-                p.kill()
+        if self.ws:
+            ws, self.ws = self.ws, None
+            await ws.close()
+        for pr in self.procs:
+            if pr.returncode is None:
+                pr.kill()
         self.procs = []
 
 
@@ -279,6 +324,7 @@ class Desk:
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
         self.bridge = Bridge(self.loop)
+        self.bridge.allowed = lambda: self.s["state"] == "connected"
         self.ring_id = 0
 
     def set(self, state, **kw):
@@ -301,7 +347,8 @@ class Desk:
         self.ring_id += 1
         rid, who = self.ring_id, self.s["caller"] or "A caller"
         self.set("ringing", reason=reason)
-        self.ringer.start(f"Call for you. {who} needs a person. {reason}. Open the takeover page and tap Answer.")
+        self.ringer.start(f"Call for you. {who} needs a person. {reason}. Tap the notification to answer.")
+        threading.Thread(target=self.ringer.notify, args=(who, reason), daemon=True).start()
         try:   # bring the page to the front (Termux needs "Display over other apps" for this from the background)
             subprocess.run(["am", "start", "--user", "0", "-a", "android.intent.action.VIEW", "-d", URL + "?ring",
                             "-e", "com.android.browser.application_id", "wa-handoff", "com.android.chrome"],
@@ -316,13 +363,13 @@ class Desk:
                 self.set("missed")
         threading.Thread(target=timeout, daemon=True).start()
 
-    def accept(self, sdp, typ):
+    def accept(self):
+        """The page then opens ws://localhost:PORT+1 for the audio."""
         if self.s["state"] not in ("live", "ringing", "connected"):
             raise ValueError(f"no call to take over (state {self.s['state']})")
         self.ringer.stop()
-        ans = self.run(self.bridge.answer(sdp, typ))
         self.set("connected")
-        return ans
+        return {"ok": True, "ws": f"ws://localhost:{PORT + 1}/"}
 
     def decline(self):
         if self.s["state"] == "ringing":
@@ -373,7 +420,7 @@ def serve():
                 elif self.path == "/ring":
                     desk.ring(body.get("reason") or "")
                 elif self.path == "/accept":
-                    return self._send(200, desk.accept(body["sdp"], body.get("type", "offer")))
+                    return self._send(200, desk.accept())
                 elif self.path == "/decline":
                     desk.decline()
                 elif self.path == "/hangup":

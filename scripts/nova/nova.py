@@ -121,7 +121,20 @@ def cmd_join(a):
     return start_join(a.url, until=a.until and time.time() + a.until * 60, wait=a.wait, title=a.title, extra=extra)
 
 
+def cmd_stay(a):
+    """Keep Nova in the meeting past its scheduled end until `nova leave` (or the meeting ends / everyone leaves)."""
+    if a.off:
+        B.STAY_FLAG.unlink(missing_ok=True)
+        print("stay: off - Nova leaves at the scheduled end again")
+    else:
+        B.STAY_FLAG.parent.mkdir(parents=True, exist_ok=True)
+        B.STAY_FLAG.write_text(str(time.time()))
+        print("stay: on - Nova ignores the scheduled end and stays until `nova.py leave`")
+    return 0
+
+
 def cmd_leave(a):
+    B.STAY_FLAG.unlink(missing_ok=True)
     cur = busy()
     if cur:
         B.LEAVE_FLAG.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +171,9 @@ def cmd_status(a):
     if cur:
         print(f"MEETING: phase={cur.get('phase')} url={cur.get('url')} title={cur.get('title') or '-'} "
               f"joined {ago(cur.get('joined_at'))} pid={cur.get('pid')}")
-        if cur.get("until"):
+        if B.STAY_FLAG.exists():
+            print("  STAY on: no scheduled leave - stays until `nova.py leave`")
+        elif cur.get("until"):
             print(f"  leaves at {time.strftime('%H:%M', time.localtime(cur['until']))} at the latest")
     else:
         print(f"MEETING: none   (last: {st.get('phase', '-')} {st.get('url', '')} {st.get('left_why', '') or ''} "
@@ -369,6 +384,8 @@ def main():
     j.add_argument("--alone-leave", type=float, help="leave after N s alone once others were there (default 90)")
     j.set_defaults(fn=cmd_join)
     sub.add_parser("leave").set_defaults(fn=cmd_leave)
+    sy = sub.add_parser("stay", help="ignore the scheduled end; stay until `leave`")
+    sy.add_argument("--off", action="store_true"); sy.set_defaults(fn=cmd_stay)
     s = sub.add_parser("status"); s.add_argument("--lines", type=int, default=5); s.set_defaults(fn=cmd_status)
     p = sub.add_parser("probe"); p.add_argument("--text", action="store_true"); p.set_defaults(fn=cmd_probe)
     lc = sub.add_parser("login-check"); lc.add_argument("--deep", action="store_true"); lc.set_defaults(fn=cmd_login_check)
