@@ -50,6 +50,11 @@ Console setup done once (2026-11-24): APIs Calendar, Drive, Meet REST, Gmail ena
 Testing, user as test user; Desktop client. When Nova's own account is unlocked: add it as a test user, `gws auth
 logout`, log in as Nova, set `~/.config/nova/autojoin.json` `{"mode": "all"}`.
 
+Adding a scope (e.g. gmail.send, granted 2026-11-27): run the login with ALL current scopes (`gws auth status`) + the
+new one, open the URL with `python scripts/nova/web.py goto <url>` (Nova's Chrome is signed in; its own tab, never the
+Meet tab): account -> Continue -> Continue -> Continue. No password needed. THEN delete `~/.config/gws/token_cache.json`:
+the cached access token keeps the old scopes and calls fail with 403 "insufficient authentication scopes".
+
 ## Common commands (JSON out; `--format table` for people)
 ```bash
 gws calendar events list --params '{"calendarId":"primary","singleEvents":true,"orderBy":"startTime","timeMin":"2026-11-25T00:00:00Z","maxResults":20}'
