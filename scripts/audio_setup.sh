@@ -5,6 +5,11 @@
 #   callout_sink  : null sink -> DEFAULT SINK (call audio lands here; record callout_sink.monitor)
 set -euo pipefail
 
+# Any pactl call auto-spawns PulseAudio with the DEFAULT exit-idle-time (20 s): while no call plays it then quits,
+# the virtual devices vanish and WhatsApp shows "Microphone not found" over the Accept button (2026-11-27).
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/pulse/daemon.conf"
+grep -qs '^exit-idle-time *= *-1' "$CONF" || { mkdir -p "$(dirname "$CONF")"; echo 'exit-idle-time = -1' >> "$CONF"; }
+
 if ! pactl info >/dev/null 2>&1; then
   pulseaudio --kill 2>/dev/null || true
   pulseaudio --start --exit-idle-time=-1 --daemonize=yes

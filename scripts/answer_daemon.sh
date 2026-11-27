@@ -106,7 +106,7 @@ log "supervisor started (pid $$, display $WA_DISPLAY, engine ${VOICE_ENGINE:-liv
 [ $NATIVE = 1 ] || export CHROME_EXTRA_ARGS="${CHROME_EXTRA_ARGS:---no-sandbox}"
 export VOICE_ENGINE="${VOICE_ENGINE:-live}"
 export AA_HEARTBEAT="$HEARTBEAT"
-cdp_fail=0; aa_fails=0; last_wa=""
+cdp_fail=0; aa_fails=0; last_wa=""; pulse_pid=""
 
 ensure_audio() {
   if ! pactl info >/dev/null 2>&1; then
@@ -115,6 +115,14 @@ ensure_audio() {
     [ -n "$(chrome_pids)" ] && restart_chrome "pulseaudio restarted"
   fi
   pactl list short sinks 2>/dev/null | grep -q virtmic_sink || { log "virtual audio devices missing - creating"; bash "$S/audio_setup.sh" >/dev/null 2>&1; }
+  # pactl auto-spawns a new PulseAudio silently, so "not running" above is rarely seen: a changed pid means Chrome
+  # is still on the dead server (no mic -> WhatsApp can't answer). Nova's own Chrome is restarted by her browser.
+  local pp; pp=$(pgrep -of "/bin/pulseaudio( |\$)")   # -x never matches on Termux
+  if [ -n "$pp" ] && [ -n "$pulse_pid" ] && [ "$pp" != "$pulse_pid" ] && [ -n "$(chrome_pids)" ]; then
+    log "PulseAudio restarted (pid $pulse_pid -> $pp) - restarting Chrome so WhatsApp gets the mic back"
+    restart_chrome "pulseaudio restarted"
+  fi
+  pulse_pid=$pp
 }
 
 ensure_x() {
